@@ -1,60 +1,102 @@
 /* ==========================================================================
    SCP — Sistema de Chegada de Professores (Simulador IoT Web)
-   Lógica JavaScript Modularizada & Simulação Completa de Firmware ESP32
+   Lógica JavaScript Modularizada & Sintetizador de Áudio Premium
    ========================================================================== */
 
-// --- AUDIO CONTEXT PARA SINTETIZADOR DO BUZZER PASSIVO ---
+// --- AUDIO CONTEXT PARA SINTETIZADOR DO BUZZER PASSIVO DE ALTA FIDELIDADE ---
 const AudioContext = window.AudioContext || window.webkitAudioContext;
 let audioCtx = null;
 
-/**
- * Emite tom/frequência no buzzer do navegador usando Web Audio API
- * @param {number} freq Frequência em Hz (ex: 2000Hz agudo, 500Hz grave)
- * @param {number} durationMs Duração de cada bipe em milissegundos
- * @param {number} count Número de bipes
- */
-function playBeep(freq, durationMs, count = 1) {
+function getAudioContext() {
   if (!audioCtx) {
     audioCtx = new AudioContext();
   }
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+  return audioCtx;
+}
 
+/**
+ * Toca tom com curva ADSR (Envelope de volume) para som mais bonito e natural
+ */
+function playTone(freq, durationMs, type = 'sine', volume = 0.08) {
+  const ctx = getAudioContext();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, ctx.currentTime);
+
+  // Envelope ADSR suave
+  gain.gain.setValueAtTime(0, ctx.currentTime);
+  gain.gain.linearRampToValueAtTime(volume, ctx.currentTime + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + (durationMs / 1000));
+
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  osc.start();
+  osc.stop(ctx.currentTime + (durationMs / 1000));
+}
+
+/**
+ * Emite som no buzzer simulando padrões sonoros de IoT Premium
+ */
+function playAudioFeedback(mode) {
   const buzzerEl = document.getElementById('buzzer');
   buzzerEl.classList.add('beeping');
 
-  let current = 0;
-  function step() {
-    if (current >= count) {
-      buzzerEl.classList.remove('beeping');
-      return;
-    }
+  setTimeout(() => {
+    buzzerEl.classList.remove('beeping');
+  }, 400);
 
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = 'square'; // Onda quadrada para som de buzzer piezoelétrico
-    osc.frequency.value = freq;
-    gain.gain.value = 0.05; // Volume seguro
-    
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    
-    osc.start();
-    setTimeout(() => {
-      osc.stop();
-      current++;
-      setTimeout(step, 80);
-    }, durationMs);
+  switch (mode) {
+    case 'success':
+      // Chime duplo harmônico (C6 -> E6)
+      playTone(1046.5, 100, 'sine', 0.08);
+      setTimeout(() => playTone(1318.51, 140, 'sine', 0.08), 80);
+      break;
+
+    case 'offline_save':
+      // Tom marimba duplo de gravação em Flash (880Hz -> 659Hz)
+      playTone(880, 90, 'triangle', 0.09);
+      setTimeout(() => playTone(659.25, 110, 'triangle', 0.09), 90);
+      break;
+
+    case 'error':
+      // Tom grave de erro/acesso negado (220Hz -> 180Hz)
+      playTone(220, 200, 'sawtooth', 0.07);
+      setTimeout(() => playTone(180, 250, 'sawtooth', 0.07), 100);
+      break;
+
+    case 'wifi_drop':
+      // Alerta sonoro de queda de rede (800Hz -> 500Hz)
+      playTone(800, 150, 'square', 0.06);
+      setTimeout(() => playTone(500, 200, 'square', 0.06), 120);
+      break;
+
+    case 'wifi_connect':
+      // Arpejo ascendente de reconexão (C5 -> E5 -> G5)
+      playTone(523.25, 80, 'sine', 0.07);
+      setTimeout(() => playTone(659.25, 80, 'sine', 0.07), 70);
+      setTimeout(() => playTone(783.99, 120, 'sine', 0.07), 140);
+      break;
+
+    case 'reset':
+      // Som grave de acionamento do botão reset (600Hz)
+      playTone(600, 300, 'triangle', 0.08);
+      break;
   }
-
-  step();
 }
 
 // --- ESTADO GLOBAL DO EMBARCADO ESP32 ---
-let isOnline = true; // Estado da Conexão Wi-Fi
-let offlineBuffer = []; // Fila FIFO de leituras mantidas em Flash LittleFS
+let isOnline = true;
+let offlineBuffer = [];
 let lastUID = "";
 let lastTime = 0;
-const DEBOUNCE_MS = 5000; // 5s para facilidade de testes
-const stateMap = {}; // Guarda estado Entrada/Saida por tag UID
+const DEBOUNCE_MS = 5000;
+const stateMap = {};
 
 // Lista de Tags Cadastradas no Banco de Dados
 const registeredTags = {
@@ -67,12 +109,65 @@ const registeredTags = {
 };
 
 /**
+ * Retorna a saudação baseada no horário do dia
+ */
+function getTimeBasedGreeting() {
+  const hour = new Date().getHours();
+  if (hour >= 5 && hour < 12) {
+    return "Bom dia";
+  } else if (hour >= 12 && hour < 18) {
+    return "Boa tarde";
+  } else {
+    return "Boa noite";
+  }
+}
+
+/**
+ * Gera mensagem rica e dinâmica de boas-vindas para Entrada ou Saída
+ */
+function generateDynamicWelcomeMessage(profName, isEntry) {
+  const greeting = getTimeBasedGreeting();
+  
+  const entryGreetings = [
+    `${greeting}, ${profName}!<br>Seja bem-vindo(a)!<br><span style="color:#86efac;">ENTRADA REGISTRADA</span>`,
+    `${greeting}, ${profName}!<br>Ótima aula no campus!<br><span style="color:#86efac;">PRESENCA CONFIRMADA</span>`,
+    `${greeting}, ${profName}!<br>Bom trabalho hoje!<br><span style="color:#86efac;">ENTRADA EM TEMPO REAL</span>`,
+    `${greeting}, ${profName}!<br>Turma notificada.<br><span style="color:#86efac;">SALA ATIVA</span>`
+  ];
+
+  const exitGreetings = [
+    `Até logo, ${profName}!<br>Tenha um bom descanso!<br><span style="color:#38bdf8;">SAIDA CONFIRMADA</span>`,
+    `${greeting}, ${profName}!<br>Aula finalizada com sucesso!<br><span style="color:#38bdf8;">SAIDA REGISTRADA</span>`,
+    `Bom descanso, ${profName}!<br>Até a próxima aula!<br><span style="color:#38bdf8;">SAIDA REGISTRADA</span>`,
+    `Até breve, ${profName}!<br>Presença concluída.<br><span style="color:#38bdf8;">SALA LIBERADA</span>`
+  ];
+
+  const list = isEntry ? entryGreetings : exitGreetings;
+  return list[Math.floor(Math.random() * list.length)];
+}
+
+/**
  * Retorna o horário atual formatado (HH:MM:SS)
  */
 function getCurrentTimeStr() {
   const now = new Date();
   return now.toTimeString().split(' ')[0];
 }
+
+/**
+ * Atualiza o relógio NTP do display OLED a cada 1 segundo
+ */
+function updateOledClock() {
+  const clockEl = document.getElementById('oledClock');
+  const greetingEl = document.getElementById('oledGreeting');
+  if (clockEl) {
+    clockEl.innerText = getCurrentTimeStr();
+  }
+  if (greetingEl) {
+    greetingEl.innerText = `${getTimeBasedGreeting()}!`;
+  }
+}
+setInterval(updateOledClock, 1000);
 
 /**
  * Imprime mensagens formatadas no Monitor Serial Virtual
@@ -96,7 +191,6 @@ function clearSerial() {
 
 /**
  * Alterna o estado da rede Wi-Fi (Modo Online vs Modo Offline)
- * Quando a rede cai: Emite alerta sonoro no Buzzer e mantém o LED Amarelo ACESO.
  */
 function toggleWifi() {
   isOnline = !isOnline;
@@ -106,17 +200,16 @@ function toggleWifi() {
 
   if (isOnline) {
     toggleBtn.classList.remove('offline');
-    toggleBtn.innerHTML = '<span>📶</span> Rede Wi-Fi: ONLINE';
+    toggleBtn.innerHTML = `
+      <svg style="width:18px;height:18px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path></svg>
+      Rede Wi-Fi: ONLINE
+    `;
     oledFooter.innerText = 'Wi-Fi: ONLINE';
     
-    // Apaga o LED Amarelo ao restabelecer a conexão
     ledYellow.classList.remove('active');
-    
-    // Bipe sonoro de reconexão bem-sucedida (1500Hz, 150ms)
-    playBeep(1500, 150, 1);
+    playAudioFeedback('wifi_connect');
     logSerial(`[WIFI_MANAGER] Conexão Wi-Fi Reestabelecida com o Roteador!`, 'api');
 
-    // Se houver registros acumulados na Flash, sincroniza em lote
     if (offlineBuffer.length > 0) {
       syncOfflineBatch();
     }
@@ -124,20 +217,20 @@ function toggleWifi() {
 
   } else {
     toggleBtn.classList.add('offline');
-    toggleBtn.innerHTML = '<span>🌐</span> Rede Wi-Fi: OFFLINE (Queda de Sinal)';
+    toggleBtn.innerHTML = `
+      <svg style="width:18px;height:18px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636a9 9 0 010 12.728m0 0l-2.829-2.829m2.829 2.829L21 21M15.536 8.464a5 5 0 010 7.072m0 0l-2.829-2.829m-4.243 2.829a4.978 4.978 0 01-1.414-2.83m-1.414 5.657a9 9 0 01-2.121-3.536m3.536 3.536L3 21m0 0l2.829-2.829"></path></svg>
+      Rede Wi-Fi: OFFLINE (Queda de Sinal)
+    `;
     oledFooter.innerText = 'Wi-Fi: OFFLINE';
     
-    // MANTÉM O LED AMARELO ACESO CONTINUAMENTE ENQUANTO ESTIVER OFFLINE!
     ledYellow.classList.add('active');
-    
-    // AVISO SONORO DE QUEDA DE REDE (2 bipes de alerta grave - 800Hz, 200ms)
-    playBeep(800, 200, 2);
+    playAudioFeedback('wifi_drop');
 
-    document.getElementById('oledBody').innerHTML = `
-      QUEDA DE SINAL!<br>
+    updateOledBody(`
+      <span style="color:#fef08a;">QUEDA DE SINAL!</span><br>
       REDE INDISPONIVEL<br>
       MODO OFFLINE ATIVO
-    `;
+    `);
     
     logSerial(`==========================================`);
     logSerial(`[WIFI_MANAGER] Queda de conexão Wi-Fi detectada!`, 'err');
@@ -147,6 +240,20 @@ function toggleWifi() {
       resetOledScreen();
     }, 3000);
   }
+}
+
+/**
+ * Atualiza o corpo do display OLED com efeito suave de transição
+ */
+function updateOledBody(htmlContent) {
+  const bodyEl = document.getElementById('oledBody');
+  if (!bodyEl) return;
+  
+  bodyEl.classList.add('updating');
+  setTimeout(() => {
+    bodyEl.innerHTML = htmlContent;
+    bodyEl.classList.remove('updating');
+  }, 120);
 }
 
 /**
@@ -165,18 +272,15 @@ function syncOfflineBatch() {
   logSerial(`[HTTP REST POST /api/v1/attendance/sync-batch] Payload:\n${batchPayload}`, 'api');
   logSerial(`[API RESPONSE] HTTP 200 OK - Lote offline sincronizado com sucesso!`, 'api');
   
-  offlineBuffer = []; // Limpa a fila
+  offlineBuffer = [];
 }
 
 /**
- * Processa a leitura de uma Tag RFID e aplica as regras de negócio de LED e Buzzer
- * @param {string} uid Hexadecimal da Tag
- * @param {string} name Nome do Professor (opcional)
+ * Processa a leitura de uma Tag RFID e exibe saudações personalizadas
  */
 function swipeTag(uid, name = null) {
   const now = Date.now();
   
-  // 1. FILTRO DE DEBOUNCE
   if (uid === lastUID && (now - lastTime < DEBOUNCE_MS)) {
     logSerial(`[DEBOUNCE] Leitura duplicada da Tag ${uid} ignorada (${Math.round((DEBOUNCE_MS - (now - lastTime))/1000)}s restantes).`, 'err');
     return;
@@ -185,30 +289,27 @@ function swipeTag(uid, name = null) {
   lastUID = uid;
   lastTime = now;
 
-  // 2. VALIDAÇÃO DE TAG CADASTRADA (CENÁRIO ERRO DE LEITURA / UNKNOWN TAG)
   if (!registeredTags[uid] && name !== "Desconhecida") {
     triggerErrorTag(uid);
     return;
   }
 
   const profName = registeredTags[uid] || name || "Professor";
-  stateMap[uid] = !stateMap[uid]; // Alterna Entrada / Saída
-  const eventType = stateMap[uid] ? "ENTRADA" : "SAÍDA";
+  stateMap[uid] = !stateMap[uid];
+  const isEntry = stateMap[uid];
+  const eventType = isEntry ? "ENTRADA" : "SAÍDA";
   const timeStr = getCurrentTimeStr();
+
+  const welcomeMsg = generateDynamicWelcomeMessage(profName, isEntry);
 
   logSerial(`==========================================`);
   logSerial(`[PRESENÇA] Tag RFID Lida: ${uid} (${profName})`);
 
-  // 3. CENÁRIO ONLINE (VERDE + 1 BIPE CURTO - 2000Hz, 120ms)
   if (isOnline) {
     document.getElementById('ledGreen').classList.add('active');
-    playBeep(2000, 120, 1);
+    playAudioFeedback('success');
 
-    document.getElementById('oledBody').innerHTML = `
-      REGISTRO OK!<br>
-      UID: ${uid}<br>
-      ${eventType} CONFIRMADA
-    `;
+    updateOledBody(welcomeMsg);
     document.getElementById('oledFooter').innerText = `Hora: ${timeStr}`;
 
     const jsonPayload = JSON.stringify({
@@ -225,18 +326,17 @@ function swipeTag(uid, name = null) {
     setTimeout(() => {
       document.getElementById('ledGreen').classList.remove('active');
       resetOledScreen();
-    }, 2500);
+    }, 3200);
 
   } else {
-    // 4. CENÁRIO OFFLINE (AMARELO PISCA + 2 BIPES CURTOS - 1200Hz, 90ms)
     document.getElementById('ledYellow').classList.add('active');
-    playBeep(1200, 90, 2);
+    playAudioFeedback('offline_save');
 
-    document.getElementById('oledBody').innerHTML = `
-      SALVO OFFLINE<br>
-      UID: ${uid}<br>
-      Flash LittleFS
-    `;
+    updateOledBody(`
+      <span style="color:#fef08a;">SALVO OFFLINE</span><br>
+      ${profName}<br>
+      ${eventType} na Flash
+    `);
     document.getElementById('oledFooter').innerText = `Hora: ${timeStr}`;
 
     const record = {
@@ -252,24 +352,23 @@ function swipeTag(uid, name = null) {
 
     setTimeout(() => {
       resetOledScreen();
-    }, 2500);
+    }, 3200);
   }
 }
 
 /**
  * Simula a leitura de uma Tag Desconhecida / Não Cadastrada (Cenário Erro)
- * LED Vermelho + 1 Bipe longo (500Hz, 450ms)
  */
 function triggerErrorTag(uid = "EE99AA11") {
   const timeStr = getCurrentTimeStr();
   document.getElementById('ledRed').classList.add('active');
-  playBeep(500, 450, 1);
+  playAudioFeedback('error');
 
-  document.getElementById('oledBody').innerHTML = `
-    ERRO DE LEITURA!<br>
+  updateOledBody(`
+    <span style="color:#f87171;">ERRO DE LEITURA!</span><br>
     TAG NAO REGISTRADA<br>
     UID: ${uid}
-  `;
+  `);
   document.getElementById('oledFooter').innerText = `Acesso Negado`;
 
   logSerial(`==========================================`);
@@ -279,7 +378,7 @@ function triggerErrorTag(uid = "EE99AA11") {
   setTimeout(() => {
     document.getElementById('ledRed').classList.remove('active');
     resetOledScreen();
-  }, 2500);
+  }, 3000);
 }
 
 /**
@@ -287,13 +386,13 @@ function triggerErrorTag(uid = "EE99AA11") {
  */
 function triggerResetButton() {
   document.getElementById('ledRed').classList.add('active');
-  playBeep(600, 300, 1);
+  playAudioFeedback('reset');
 
-  document.getElementById('oledBody').innerHTML = `
-    RESET WI-FI<br>
+  updateOledBody(`
+    <span style="color:#f87171;">RESET WI-FI</span><br>
     Modo Portal Cativo<br>
     Aguardando Setup
-  `;
+  `);
   document.getElementById('oledFooter').innerText = `IP: 192.168.4.1`;
 
   logSerial(`[GPIO 14] Botão de Reset Wi-Fi Pressionado!`, 'err');
@@ -302,24 +401,29 @@ function triggerResetButton() {
   setTimeout(() => {
     document.getElementById('ledRed').classList.remove('active');
     resetOledScreen();
-  }, 3000);
+  }, 3500);
 }
 
 /**
- * Restaura o estado de repouso da tela OLED e mantém os LEDs de estado (ex: LED Amarelo se offline)
+ * Restaura a tela de repouso com relógio e saudações dinâmicas
  */
 function resetOledScreen() {
-  document.getElementById('oledBody').innerHTML = `
+  const greeting = getTimeBasedGreeting();
+  updateOledBody(`
     SISTEMA PRONTO<br>
     Aproxime o cartão<br>
     na entrada da sala
-  `;
+  `);
+  document.getElementById('oledGreeting').innerText = `${greeting}!`;
   document.getElementById('oledFooter').innerText = isOnline ? `Wi-Fi: ONLINE` : `Wi-Fi: OFFLINE`;
   
-  // Mantém o LED Amarelo aceso continuamente enquanto a rede continuar offline!
   if (!isOnline) {
     document.getElementById('ledYellow').classList.add('active');
   } else {
     document.getElementById('ledYellow').classList.remove('active');
   }
 }
+
+// Inicialização da tela ao carregar
+updateOledClock();
+resetOledScreen();
