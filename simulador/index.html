@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simulador SCP - Sistema de Chegada de Professores (ESP32 IoT)</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- CABEÇALHO DO SISTEMA -->
+  <header>
+    <h1>
+      <span>📡</span> SCP — Sistema de Chegada de Professores
+    </h1>
+    <div class="badge">Simulação Embarcada ESP32-S3 (Etapa R4)</div>
+  </header>
+
+  <!-- LAYOUT PRINCIPAL DA BANCADA E MONITOR -->
+  <main class="main-layout">
+    
+    <!-- BANCADA VIRTUAL DE HARDWARE -->
+    <section class="board-container">
+      <div class="bench-title">
+        <span>⚙️</span> Bancada Virtual de Testes (ESP32 DevKit v1 + Periféricos)
+      </div>
+
+      <div class="workbench">
+        
+        <!-- DISPLAY OLED SSD1306 -->
+        <article class="component-card">
+          <div class="component-label">
+            <span>Display OLED I2C 128x64</span>
+            <span style="font-size: 0.65rem; color: #94a3b8;">SSD1306</span>
+          </div>
+          <div class="oled-screen" id="oledDisplay">
+            <div class="oled-header">== SCP - IFPE ==</div>
+            <div class="oled-body" id="oledBody">
+              SISTEMA PRONTO<br>
+              Aproxime o cartão<br>
+              na entrada da sala
+            </div>
+            <div class="oled-footer" id="oledFooter">Wi-Fi: ONLINE</div>
+          </div>
+        </article>
+
+        <!-- LEITOR RFID MFRC522 -->
+        <article class="component-card">
+          <div class="component-label">
+            <span>Leitor RFID/NFC RC522</span>
+            <span style="font-size: 0.65rem; color: #94a3b8;">13.56 MHz (SPI)</span>
+          </div>
+          <div class="rfid-module" id="rfidPad" onclick="swipeTag('4A8B12F0', 'Prof. Athos')">
+            <div class="rfid-coil">APROXIME A TAG AQUI</div>
+            <span style="font-size: 0.65rem; color: #93c5fd;">(Clique para aproximar)</span>
+          </div>
+          <div class="tags-container">
+            <button class="tag-btn" onclick="swipeTag('4A8B12F0', 'Prof. Athos')">💳 Tag 1 (Athos)</button>
+            <button class="tag-btn" onclick="swipeTag('9C3D45E6', 'Prof. Lauro')">💳 Tag 2 (Lauro)</button>
+          </div>
+        </article>
+
+        <!-- ATUADORES (LEDS E BUZZER) -->
+        <article class="component-card">
+          <div class="component-label">
+            <span>Atuadores & Feedback</span>
+            <span style="font-size: 0.65rem; color: #94a3b8;">LEDs + Buzzer</span>
+          </div>
+          <div class="actuators-grid">
+            <div class="led-box">
+              <div class="led-bulb green" id="ledGreen"></div>
+              <span>Sucesso</span>
+            </div>
+            <div class="led-box">
+              <div class="led-bulb yellow" id="ledYellow"></div>
+              <span>Offline</span>
+            </div>
+            <div class="led-box">
+              <div class="led-bulb red" id="ledRed"></div>
+              <span>Erro</span>
+            </div>
+            <div class="led-box">
+              <div class="buzzer-box" id="buzzer">🔊</div>
+              <span>Buzzer</span>
+            </div>
+          </div>
+        </article>
+
+        <!-- CONTROLE AUXILIAR / BOTÃO RESET WI-FI -->
+        <article class="component-card">
+          <div class="component-label">
+            <span>Entrada Auxiliar</span>
+            <span style="font-size: 0.65rem; color: #94a3b8;">GPIO 14</span>
+          </div>
+          <button class="btn-push" onclick="triggerResetButton()">
+            <span>🔘</span> Pressionar Botão Wi-Fi Reset
+          </button>
+          <div style="font-size: 0.7rem; color: #64748b; text-align: center; margin-top: -0.3rem;">
+            Simula o acionamento do Modo Portal Cativo (Setup Wi-Fi)
+          </div>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- TERMINAL SERIAL E TELEMETRIA DE SAÍDA -->
+    <aside class="sidebar">
+      <div class="bench-title">
+        <span>🖥️</span> Monitor Serial (115200 baud)
+      </div>
+      
+      <div class="serial-terminal" id="serialLog">
+        <div class="serial-line">[SCP] Inicializando Firmware ESP32 v1.2.0...</div>
+        <div class="serial-line">[OK] Leitor RFID RC522 SPI (Pin 5,4,18,19,23) Pronto!</div>
+        <div class="serial-line">[OK] Display OLED SSD1306 I2C (Pin 21,22) Inicializado!</div>
+        <div class="serial-line">[OK] Wi-Fi Conectado -> IP: 192.168.1.105</div>
+        <div class="serial-line">[NTP] Hora sincronizada via pool.ntp.org: 19:00:00</div>
+        <div class="serial-line">==========================================</div>
+        <div class="serial-line">[SISTEMA] Aguardando leitura de tag RFID...</div>
+      </div>
+
+      <footer class="status-bar">
+        <div><span class="status-indicator"></span>Status ESP32: OK</div>
+        <button class="btn-clear" onclick="clearSerial()">Limpar Console</button>
+      </footer>
+    </aside>
+
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
