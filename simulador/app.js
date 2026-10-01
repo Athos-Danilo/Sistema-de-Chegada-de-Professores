@@ -96,27 +96,56 @@ function clearSerial() {
 
 /**
  * Alterna o estado da rede Wi-Fi (Modo Online vs Modo Offline)
+ * Quando a rede cai: Emite alerta sonoro no Buzzer e mantém o LED Amarelo ACESO.
  */
 function toggleWifi() {
   isOnline = !isOnline;
   const toggleBtn = document.getElementById('wifiToggleBtn');
   const oledFooter = document.getElementById('oledFooter');
+  const ledYellow = document.getElementById('ledYellow');
 
   if (isOnline) {
     toggleBtn.classList.remove('offline');
     toggleBtn.innerHTML = '<span>📶</span> Rede Wi-Fi: ONLINE';
     oledFooter.innerText = 'Wi-Fi: ONLINE';
+    
+    // Apaga o LED Amarelo ao restabelecer a conexão
+    ledYellow.classList.remove('active');
+    
+    // Bipe sonoro de reconexão bem-sucedida (1500Hz, 150ms)
+    playBeep(1500, 150, 1);
     logSerial(`[WIFI_MANAGER] Conexão Wi-Fi Reestabelecida com o Roteador!`, 'api');
 
     // Se houver registros acumulados na Flash, sincroniza em lote
     if (offlineBuffer.length > 0) {
       syncOfflineBatch();
     }
+    resetOledScreen();
+
   } else {
     toggleBtn.classList.add('offline');
     toggleBtn.innerHTML = '<span>🌐</span> Rede Wi-Fi: OFFLINE (Queda de Sinal)';
     oledFooter.innerText = 'Wi-Fi: OFFLINE';
-    logSerial(`[WIFI_MANAGER] Queda de conexão Wi-Fi detectada! Entrando em Modo Off-line (LittleFS Flash)...`, 'err');
+    
+    // MANTÉM O LED AMARELO ACESO CONTINUAMENTE ENQUANTO ESTIVER OFFLINE!
+    ledYellow.classList.add('active');
+    
+    // AVISO SONORO DE QUEDA DE REDE (2 bipes de alerta grave - 800Hz, 200ms)
+    playBeep(800, 200, 2);
+
+    document.getElementById('oledBody').innerHTML = `
+      QUEDA DE SINAL!<br>
+      REDE INDISPONIVEL<br>
+      MODO OFFLINE ATIVO
+    `;
+    
+    logSerial(`==========================================`);
+    logSerial(`[WIFI_MANAGER] Queda de conexão Wi-Fi detectada!`, 'err');
+    logSerial(`[SISTEMA] Alerta sonoro emitido e LED Amarelo ativado (Modo Flash LittleFS).`, 'err');
+
+    setTimeout(() => {
+      resetOledScreen();
+    }, 3000);
   }
 }
 
@@ -199,7 +228,7 @@ function swipeTag(uid, name = null) {
     }, 2500);
 
   } else {
-    // 4. CENÁRIO OFFLINE (AMARELO + 2 BIPES CURTOS - 1200Hz, 90ms)
+    // 4. CENÁRIO OFFLINE (AMARELO PISCA + 2 BIPES CURTOS - 1200Hz, 90ms)
     document.getElementById('ledYellow').classList.add('active');
     playBeep(1200, 90, 2);
 
@@ -222,7 +251,6 @@ function swipeTag(uid, name = null) {
     logSerial(`[FLASH BUFFER] Registros pendentes aguardando reconexão: ${offlineBuffer.length}`, 'err');
 
     setTimeout(() => {
-      document.getElementById('ledYellow').classList.remove('active');
       resetOledScreen();
     }, 2500);
   }
@@ -278,7 +306,7 @@ function triggerResetButton() {
 }
 
 /**
- * Restaura o estado de repouso da tela OLED
+ * Restaura o estado de repouso da tela OLED e mantém os LEDs de estado (ex: LED Amarelo se offline)
  */
 function resetOledScreen() {
   document.getElementById('oledBody').innerHTML = `
@@ -287,4 +315,11 @@ function resetOledScreen() {
     na entrada da sala
   `;
   document.getElementById('oledFooter').innerText = isOnline ? `Wi-Fi: ONLINE` : `Wi-Fi: OFFLINE`;
+  
+  // Mantém o LED Amarelo aceso continuamente enquanto a rede continuar offline!
+  if (!isOnline) {
+    document.getElementById('ledYellow').classList.add('active');
+  } else {
+    document.getElementById('ledYellow').classList.remove('active');
+  }
 }
