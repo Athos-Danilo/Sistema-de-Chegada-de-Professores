@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "author": "Athos Danilo",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi-esp32-devkit-v1",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "board-ssd1306",
+      "id": "oled",
+      "top": -150,
+      "left": -120,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-mfrc522",
+      "id": "rfid",
+      "top": -150,
+      "left": 40,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-buzzer",
+      "id": "buzzer",
+      "top": 150,
+      "left": 130,
+      "attrs": { "volume": "0.1" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_green",
+      "top": 150,
+      "left": -110,
+      "attrs": { "color": "green", "label": "Sucesso" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_yellow",
+      "top": 150,
+      "left": -60,
+      "attrs": { "color": "yellow", "label": "Offline" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_red",
+      "top": 150,
+      "left": -10,
+      "attrs": { "color": "red", "label": "Erro" }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn_reset",
+      "top": 150,
+      "left": 50,
+      "attrs": { "color": "blue", "label": "Wi-Fi Reset" }
+    }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+
+    [ "oled:GND", "esp:GND.1", "black", [ "v0" ] ],
+    [ "oled:VCC", "esp:3V3", "red", [ "v0" ] ],
+    [ "oled:SCL", "esp:22", "yellow", [ "v0" ] ],
+    [ "oled:SDA", "esp:21", "green", [ "v0" ] ],
+
+    [ "rfid:VCC", "esp:3V3", "red", [ "v0" ] ],
+    [ "rfid:GND", "esp:GND.2", "black", [ "v0" ] ],
+    [ "rfid:RST", "esp:4", "orange", [ "v0" ] ],
+    [ "rfid:SDA", "esp:5", "blue", [ "v0" ] ],
+    [ "rfid:MOSI", "esp:23", "purple", [ "v0" ] ],
+    [ "rfid:MISO", "esp:19", "grey", [ "v0" ] ],
+    [ "rfid:SCK", "esp:18", "white", [ "v0" ] ],
+
+    [ "buzzer:1", "esp:GND.2", "black", [ "v0" ] ],
+    [ "buzzer:2", "esp:12", "red", [ "v0" ] ],
+
+    [ "led_green:C", "esp:GND.1", "black", [ "v0" ] ],
+    [ "led_green:A", "esp:13", "green", [ "v0" ] ],
+
+    [ "led_yellow:C", "esp:GND.1", "black", [ "v0" ] ],
+    [ "led_yellow:A", "esp:2", "yellow", [ "v0" ] ],
+
+    [ "led_red:C", "esp:GND.1", "black", [ "v0" ] ],
+    [ "led_red:A", "esp:15", "red", [ "v0" ] ],
+
+    [ "btn_reset:1.A", "esp:14", "blue", [ "v0" ] ],
+    [ "btn_reset:2.A", "esp:GND.2", "black", [ "v0" ] ]
+  ],
+  "dependencies": {}
+}
