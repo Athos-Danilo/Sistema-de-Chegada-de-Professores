@@ -61,6 +61,7 @@
             <button class="tag-btn" onclick="swipeTag('3B7C11E9', 'Profa. Simone')">💳 Profa. Simone</button>
             <button class="tag-btn" onclick="swipeTag('7D5E88A2', 'Prof. Carlos')">💳 Prof. Carlos</button>
             <button class="tag-btn" onclick="swipeTag('2E9F44C1', 'Profa. Luciana')">💳 Profa. Luciana</button>
+            <button class="tag-btn error-btn" onclick="triggerErrorTag('EE99AA11')">🚫 Simular Tag Não Cadastrada (Erro)</button>
           </div>
         </article>
 
@@ -90,12 +91,17 @@
           </div>
         </article>
 
-        <!-- CONTROLE AUXILIAR / BOTÃO RESET WI-FI -->
+        <!-- CONTROLE AUXILIAR / BOTÃO RESET WI-FI & SIMULAÇÃO REDE -->
         <article class="component-card">
           <div class="component-label">
-            <span>Entrada Auxiliar</span>
-            <span style="font-size: 0.65rem; color: #94a3b8;">GPIO 14</span>
+            <span>Controles de Teste & Conectividade</span>
+            <span style="font-size: 0.65rem; color: #94a3b8;">GPIO 14 / Wi-Fi</span>
           </div>
+
+          <button class="wifi-toggle" id="wifiToggleBtn" onclick="toggleWifi()">
+            <span>📶</span> Rede Wi-Fi: ONLINE
+          </button>
+
           <button class="btn-push" onclick="triggerResetButton()">
             <span>🔘</span> Pressionar Botão Wi-Fi Reset
           </button>
@@ -107,7 +113,7 @@
       </div>
     </section>
 
-    <!-- TERMINAL SERIAL E TELEMETRIA DE SAÍDA (EXPANDIDO) -->
+    <!-- TERMINAL SERIAL E TELEMETRIA DE SAÍDA -->
     <aside class="sidebar">
       <div class="bench-title">
         <span>🖥️</span> Monitor Serial (115200 baud)

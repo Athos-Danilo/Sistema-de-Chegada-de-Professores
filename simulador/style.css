@@ -236,7 +236,7 @@ header h1 span {
 /* --- MÓDULO LEITOR RFID RC522 --- */
 .rfid-module {
   width: 170px;
-  height: 150px;
+  height: 140px;
   background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
   border-radius: 12px;
   border: 2px solid #3b82f6;
@@ -244,7 +244,7 @@ header h1 span {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.6rem;
+  gap: 0.5rem;
   cursor: pointer;
   transition: all 0.3s ease;
   user-select: none;
@@ -258,8 +258,8 @@ header h1 span {
 }
 
 .rfid-coil {
-  width: 90px;
-  height: 90px;
+  width: 85px;
+  height: 85px;
   border: 3px dashed #93c5fd;
   border-radius: 50%;
   display: flex;
@@ -303,6 +303,48 @@ header h1 span {
   background: rgba(71, 85, 105, 0.9);
   border-color: var(--accent-blue);
   color: var(--accent-blue);
+}
+
+.tag-btn.error-btn {
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  background: rgba(127, 29, 29, 0.3);
+  grid-column: span 2;
+}
+
+.tag-btn.error-btn:hover {
+  background: rgba(220, 38, 38, 0.4);
+  border-color: var(--red-glow);
+  color: #ffffff;
+}
+
+/* --- TOGGLE WI-FI ONLINE/OFFLINE --- */
+.wifi-toggle {
+  background: rgba(34, 197, 94, 0.15);
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  color: #86efac;
+  padding: 0.6rem 1rem;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.wifi-toggle.offline {
+  background: rgba(234, 179, 8, 0.15);
+  border-color: rgba(234, 179, 8, 0.4);
+  color: #fef08a;
+}
+
+.wifi-toggle:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
 /* --- ATUADORES & LEDS --- */
