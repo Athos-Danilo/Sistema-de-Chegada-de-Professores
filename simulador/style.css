@@ -710,7 +710,6 @@ header h1 {
   overflow-y: auto;
   min-height: 480px;
   max-height: 680px;
-  white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.6;
   box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.8);
@@ -718,6 +717,7 @@ header h1 {
 
 .serial-line {
   margin-bottom: 0.4rem;
+  white-space: pre-wrap;
 }
 
 .serial-line.api {

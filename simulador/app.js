@@ -98,14 +98,14 @@ let lastTime = 0;
 const DEBOUNCE_MS = 5000;
 const stateMap = {};
 
-// Lista de Tags Cadastradas no Banco de Dados
+// Lista de Tags Cadastradas e suas respectivas Salas (Simulando múltiplos dispositivos)
 const registeredTags = {
-  "4A8B12F0": "Prof. Lauro Alves",
-  "9C3D45E6": "Prof. Leonardo",
-  "1F8A92D4": "Prof. Eduardo",
-  "3B7C11E9": "Profa. Simone",
-  "7D5E88A2": "Prof. Carlos",
-  "2E9F44C1": "Profa. Luciana"
+  "4A8B12F0": { name: "Prof. Lauro Alves", room: "EMB-LAB-07" },
+  "9C3D45E6": { name: "Prof. Leonardo", room: "EMB-LAB-08" },
+  "1F8A92D4": { name: "Prof. Eduardo", room: "EMB-SALA-14" },
+  "3B7C11E9": { name: "Profa. Simone", room: "EMB-SALA-15" },
+  "7D5E88A2": { name: "Prof. Carlos", room: "EMB-AUDITORIO" },
+  "2E9F44C1": { name: "Profa. Luciana", room: "EMB-LAB-REDES" }
 };
 
 /**
@@ -264,13 +264,17 @@ function syncOfflineBatch() {
   logSerial(`[BATCH_SYNC] Retransmitindo ${offlineBuffer.length} registros offline acumulados na Flash LittleFS...`, 'api');
 
   const batchPayload = JSON.stringify({
-    device_id: "EMB-LAB-101",
+    device_id: "EMB-MULTIPLOS", // No batch, simulamos que são de vários locais ou do último local
     batch_count: offlineBuffer.length,
     records: offlineBuffer
   }, null, 2);
 
   logSerial(`[HTTP REST POST /api/v1/attendance/sync-batch] Payload:\n${batchPayload}`, 'api');
   logSerial(`[API RESPONSE] HTTP 200 OK - Lote offline sincronizado com sucesso!`, 'api');
+  
+  setTimeout(() => {
+    logSerial(`[CLOUD BACKEND] Lote processado. Histórico atualizado no Banco Poliglota!`, 'api');
+  }, 800);
 
   offlineBuffer = [];
 }
@@ -294,7 +298,14 @@ function swipeTag(uid, name = null) {
     return;
   }
 
-  const profName = registeredTags[uid] || name || "Professor";
+  let profName = name || "Professor";
+  let deviceId = "EMB-SALA-DESCONHECIDA";
+
+  if (registeredTags[uid]) {
+    profName = registeredTags[uid].name;
+    deviceId = registeredTags[uid].room;
+  }
+
   stateMap[uid] = !stateMap[uid];
   const isEntry = stateMap[uid];
   const eventType = isEntry ? "ENTRADA" : "SAÍDA";
@@ -303,7 +314,7 @@ function swipeTag(uid, name = null) {
   const welcomeMsg = generateDynamicWelcomeMessage(profName, isEntry);
 
   logSerial(`==========================================`);
-  logSerial(`[PRESENÇA] Tag RFID Lida: ${uid} (${profName})`);
+  logSerial(`[PRESENÇA] Tag RFID Lida: ${uid} (${profName}) - Local: ${deviceId}`);
 
   if (isOnline) {
     document.getElementById('ledGreen').classList.add('active');
@@ -313,7 +324,7 @@ function swipeTag(uid, name = null) {
     document.getElementById('oledFooter').innerText = `Hora: ${timeStr}`;
 
     const jsonPayload = JSON.stringify({
-      device_id: "EMB-LAB-101",
+      device_id: deviceId,
       tag_uid: uid,
       event_type: eventType,
       is_offline_record: false,
@@ -322,6 +333,10 @@ function swipeTag(uid, name = null) {
 
     logSerial(`[HTTP REST POST /api/v1/attendance] ${jsonPayload}`, 'api');
     logSerial(`[API RESPONSE] HTTP 200 OK - Presença transmitida em tempo real!`, 'api');
+
+    setTimeout(() => {
+      logSerial(`[CLOUD BACKEND] Presença validada. Alerta disparado na API do WhatsApp da Turma!`, 'api');
+    }, 600);
 
     setTimeout(() => {
       document.getElementById('ledGreen').classList.remove('active');
@@ -340,6 +355,7 @@ function swipeTag(uid, name = null) {
     document.getElementById('oledFooter').innerText = `Hora: ${timeStr}`;
 
     const record = {
+      device_id: deviceId,
       tag_uid: uid,
       event_type: eventType,
       read_timestamp: Math.floor(Date.now() / 1000),
@@ -426,3 +442,18 @@ function resetOledScreen() {
 // Inicialização da tela ao carregar
 updateOledClock();
 resetOledScreen();
+
+// --- SISTEMA DE TELEMETRIA (HEARTBEAT) ---
+let uptimeSeconds = 0;
+setInterval(() => {
+  uptimeSeconds += 30;
+  if (isOnline) {
+    // Simula variação natural de sinal de antena e uso de memória
+    const rssi = -50 - Math.floor(Math.random() * 20); 
+    const freeHeap = 180 + Math.floor(Math.random() * 20); 
+    
+    logSerial(`[TELEMETRIA] Heartbeat enviado (Uptime: ${uptimeSeconds}s, RSSI: ${rssi}dBm, Free Heap: ${freeHeap}KB, Pending Offline: ${offlineBuffer.length})`, 'api');
+  } else {
+    logSerial(`[TELEMETRIA LOCAL] Sistema operando normalmente. Aguardando restabelecimento do Wi-Fi... (Uptime: ${uptimeSeconds}s)`, 'err');
+  }
+}, 30000);
