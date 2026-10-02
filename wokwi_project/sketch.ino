@@ -42,6 +42,7 @@ String last_uid = "";
 unsigned long last_read_time = 0;
 const unsigned long DEBOUNCE_DELAY = 10000; // 10s para testes
 bool is_registered_in = false; // Alterna Entrada/Saída
+bool wasOffline = false;
 
 // --- CONFIGURAÇÃO DE REDE ---
 const char* ssid = "Wokwi-GUEST";
@@ -122,12 +123,20 @@ void setup() {
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    wasOffline = false;
   } else {
     Serial.println("\n[AVISO] Conexao Wi-Fi falhou! Operando em modo offline.");
+    digitalWrite(LED_YELLOW_PIN, HIGH);
+    playBuzzerBeep(1200, 100, 2);
+    wasOffline = true;
   }
 
   playBuzzerBeep(1000, 100, 2); // 2 bipes indicando inicialização completa
-  showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "na entrada da sala", "Status: ONLINE");
+  if (wasOffline) {
+    showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "na entrada da sala", "Status: OFFLINE");
+  } else {
+    showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "na entrada da sala", "Status: ONLINE");
+  }
 }
 
 String getFormattedTime() {
@@ -184,22 +193,47 @@ void processTag(String uid) {
     
     showScreenMessage("OFFLINE SAVED", "UID: " + uid, tipo + " (Offline)", "Hora: " + hora);
     delay(2000);
-    digitalWrite(LED_YELLOW_PIN, LOW);
+    digitalWrite(LED_YELLOW_PIN, HIGH); // Mantém o amarelo aceso no modo offline
   }
 
-  showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "na entrada da sala", "Status: ONLINE");
+  if (WiFi.status() == WL_CONNECTED) {
+    showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "na entrada da sala", "Status: ONLINE");
+  } else {
+    showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "na entrada da sala", "Status: OFFLINE");
+  }
 }
 
 void loop() {
+  // Gerenciamento do estado do Wi-Fi
+  bool isOffline = (WiFi.status() != WL_CONNECTED);
+  
+  if (isOffline && !wasOffline) {
+    Serial.println("\n[ALERTA] Conexao Wi-Fi perdida! Entrando em modo offline.");
+    digitalWrite(LED_YELLOW_PIN, HIGH);
+    playBuzzerBeep(1200, 100, 2); // 2 bipes curtos (Offline)
+    showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "na entrada da sala", "Status: OFFLINE");
+    wasOffline = true;
+  } else if (!isOffline && wasOffline) {
+    Serial.println("\n[INFO] Conexao Wi-Fi restaurada!");
+    digitalWrite(LED_YELLOW_PIN, LOW);
+    playBuzzerBeep(2000, 150, 1); // 1 bipe curto (Restaurado)
+    showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "na entrada da sala", "Status: ONLINE");
+    wasOffline = false;
+  }
+
   // Teste do Botão de Reset / Erro
   if (digitalRead(BTN_RESET_PIN) == LOW) {
     Serial.println("[BOTAO RESET] Botao de Reset Wi-Fi pressionado!");
     digitalWrite(LED_RED_PIN, HIGH);
-    playBuzzerBeep(500, 400, 1);
+    playBuzzerBeep(500, 800, 1); // 1 bipe longo para erro/reset
     showScreenMessage("RESET WI-FI", "Modo Portal Cativo", "Aguardando Setup", "IP: 192.168.4.1");
     delay(3000);
     digitalWrite(LED_RED_PIN, LOW);
-    showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "na entrada da sala", "Status: ONLINE");
+    if (wasOffline) {
+      showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "na entrada da sala", "Status: OFFLINE");
+    } else {
+      showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "na entrada da sala", "Status: ONLINE");
+    }
   }
 
   // Verifica se há novas tags RFID no leitor
