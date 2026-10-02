@@ -446,7 +446,7 @@ resetOledScreen();
 // --- SISTEMA DE TELEMETRIA (HEARTBEAT) ---
 let uptimeSeconds = 0;
 setInterval(() => {
-  uptimeSeconds += 30;
+  uptimeSeconds += 60;
   if (isOnline) {
     // Simula variação natural de sinal de antena e uso de memória
     const rssi = -50 - Math.floor(Math.random() * 20); 
@@ -456,4 +456,4 @@ setInterval(() => {
   } else {
     logSerial(`[TELEMETRIA LOCAL] Sistema operando normalmente. Aguardando restabelecimento do Wi-Fi... (Uptime: ${uptimeSeconds}s)`, 'err');
   }
-}, 30000);
+}, 60000);
