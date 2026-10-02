@@ -127,7 +127,7 @@ function getTimeBasedGreeting() {
  */
 function generateDynamicWelcomeMessage(profName, isEntry) {
   const greeting = getTimeBasedGreeting();
-  
+
   const entryGreetings = [
     `${greeting}, ${profName}!<br>Seja bem-vindo(a)!<br><span style="color:#86efac;">ENTRADA REGISTRADA</span>`,
     `${greeting}, ${profName}!<br>Ótima aula no campus!<br><span style="color:#86efac;">PRESENCA CONFIRMADA</span>`,
@@ -185,7 +185,7 @@ function logSerial(msg, type = 'normal') {
  * Limpa o console serial
  */
 function clearSerial() {
-  document.getElementById('serialLog').innerHTML = 
+  document.getElementById('serialLog').innerHTML =
     '<div class="serial-line">[SISTEMA] Console limpo. Aguardando leitura de tag RFID...</div>';
 }
 
@@ -205,7 +205,7 @@ function toggleWifi() {
       Rede Wi-Fi: ONLINE
     `;
     oledFooter.innerText = 'Wi-Fi: ONLINE';
-    
+
     ledYellow.classList.remove('active');
     playAudioFeedback('wifi_connect');
     logSerial(`[WIFI_MANAGER] Conexão Wi-Fi Reestabelecida com o Roteador!`, 'api');
@@ -222,7 +222,7 @@ function toggleWifi() {
       Rede Wi-Fi: OFFLINE (Queda de Sinal)
     `;
     oledFooter.innerText = 'Wi-Fi: OFFLINE';
-    
+
     ledYellow.classList.add('active');
     playAudioFeedback('wifi_drop');
 
@@ -231,7 +231,7 @@ function toggleWifi() {
       REDE INDISPONIVEL<br>
       MODO OFFLINE ATIVO
     `);
-    
+
     logSerial(`==========================================`);
     logSerial(`[WIFI_MANAGER] Queda de conexão Wi-Fi detectada!`, 'err');
     logSerial(`[SISTEMA] Alerta sonoro emitido e LED Amarelo ativado (Modo Flash LittleFS).`, 'err');
@@ -248,7 +248,7 @@ function toggleWifi() {
 function updateOledBody(htmlContent) {
   const bodyEl = document.getElementById('oledBody');
   if (!bodyEl) return;
-  
+
   bodyEl.classList.add('updating');
   setTimeout(() => {
     bodyEl.innerHTML = htmlContent;
@@ -262,7 +262,7 @@ function updateOledBody(htmlContent) {
 function syncOfflineBatch() {
   logSerial(`==========================================`);
   logSerial(`[BATCH_SYNC] Retransmitindo ${offlineBuffer.length} registros offline acumulados na Flash LittleFS...`, 'api');
-  
+
   const batchPayload = JSON.stringify({
     device_id: "EMB-LAB-101",
     batch_count: offlineBuffer.length,
@@ -271,7 +271,7 @@ function syncOfflineBatch() {
 
   logSerial(`[HTTP REST POST /api/v1/attendance/sync-batch] Payload:\n${batchPayload}`, 'api');
   logSerial(`[API RESPONSE] HTTP 200 OK - Lote offline sincronizado com sucesso!`, 'api');
-  
+
   offlineBuffer = [];
 }
 
@@ -280,9 +280,9 @@ function syncOfflineBatch() {
  */
 function swipeTag(uid, name = null) {
   const now = Date.now();
-  
+
   if (uid === lastUID && (now - lastTime < DEBOUNCE_MS)) {
-    logSerial(`[DEBOUNCE] Leitura duplicada da Tag ${uid} ignorada (${Math.round((DEBOUNCE_MS - (now - lastTime))/1000)}s restantes).`, 'err');
+    logSerial(`[DEBOUNCE] Leitura duplicada da Tag ${uid} ignorada (${Math.round((DEBOUNCE_MS - (now - lastTime)) / 1000)}s restantes).`, 'err');
     return;
   }
 
@@ -411,12 +411,11 @@ function resetOledScreen() {
   const greeting = getTimeBasedGreeting();
   updateOledBody(`
     SISTEMA PRONTO<br>
-    Aproxime o cartão<br>
-    na entrada da sala
+    Aproxime o cartão no Leitor
   `);
   document.getElementById('oledGreeting').innerText = `${greeting}!`;
   document.getElementById('oledFooter').innerText = isOnline ? `Wi-Fi: ONLINE` : `Wi-Fi: OFFLINE`;
-  
+
   if (!isOnline) {
     document.getElementById('ledYellow').classList.add('active');
   } else {
