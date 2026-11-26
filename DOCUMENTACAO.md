@@ -8,46 +8,41 @@
 - [1. Visão Geral do Projeto](#1-visão-geral-do-projeto)
 - [2. Fluxo de Funcionamento Detalhado](#2-fluxo-de-funcionamento-detalhado)
 - [3. Especificação do Sistema Embarcado (IoT)](#3-especificação-do-sistema-embarcado-iot)
-  - [3.1. Guia de Seleção e Recomendação de Hardware (Planejado vs. Adquirido)](#31-guia-de-seleção-e-recomendação-de-hardware-planejado-vs-adquirido)
+  - [3.1. Componentes e Hardware](#31-componentes-e-hardware)
   - [3.2. Mapeamento de Pinos e Conexões (Pinout)](#32-mapeamento-de-pinos-e-conexões-pinout)
   - [3.3. Arquitetura do Firmware & Concorrência (FreeRTOS & FSM)](#33-arquitetura-do-firmware--concorrência-freertos--fsm)
   - [3.4. Gestão de Memória Off-line e Persistência Local](#34-gestão-de-memória-off-line-e-persistência-local)
   - [3.5. Contrato de Comunicação & Payloads JSON (API REST)](#35-contrato-de-comunicação--payloads-json-api-rest)
-  - [3.6. Provisionamento Wi-Fi, Sincronização NTP & RTC](#36-provisionamento-wi-fi-sincronização-ntp--rtc)
+  - [3.6. Provisionamento Wi-Fi & Sincronização NTP](#36-provisionamento-wi-fi--sincronização-ntp)
   - [3.7. Segurança, Autenticação & Atualização OTA](#37-segurança-autenticação--atualização-ota)
   - [3.8. Especificações do Gabinete Físico (Case 3D)](#38-especificações-do-gabinete-físico-case-3d)
   - [3.9. Requisitos Funcionais (RF-EMB)](#39-requisitos-funcionais-rf-emb---sistema-embarcado)
   - [3.10. Requisitos Não-Funcionais (RNF-EMB)](#310-requisitos-não-funcionais-rnf-emb---sistema-embarcado)
   - [3.11. Matriz de Testes do Sistema Embarcado](#311-matriz-de-testes-do-sistema-embarcado)
 - [4. Arquitetura de Software e Persistência](#4-arquitetura-de-software-e-persistência)
-  - [4.1. Backend](#41-backend)
-  - [4.2. Frontend *(Escopo Removido)*](#42-frontend-escopo-removido)
-  - [4.3. Banco de Dados *(Persistência Única)*](#43-banco-de-dados-persistência-única)
+  - [4.1. Backend (Go na Vercel)](#41-backend-go-na-vercel)
+  - [4.2. Banco de Dados (PostgreSQL na Neon)](#42-banco-de-dados-postgresql-na-neon)
+  - [4.3. Notificações (Telegram Bot API)](#43-notificações-telegram-bot-api)
 - [5. Próximos Passos](#5-próximos-passos)
 
 ---
 
 ## 1. Visão Geral do Projeto
 
-O projeto consiste em um **Sistema Inteligente de Registro de Presença e Localização de Professores em Tempo Real**. 
+O projeto consiste em um **Sistema Inteligente de Registro de Presença e Localização de Professores em Tempo Real**.
 
-A solução integra hardware (dispositivo IoT/Embarcado) com um **Backend REST**, um **Banco de Dados único** e um **Bot de Notificações no Telegram** para automatizar o registro de presença dos docentes nas salas de aula e laboratórios do campus, avisando automaticamente as turmas/grupos pelo Telegram.
-
-> 🔄 **Revisão de Escopo (Versão Real de Apresentação vs. Planejamento Inicial):**  
-> Durante a evolução prática do projeto, a equipe simplificou a arquitetura externa e ajustou o hardware de bancada para priorizar estabilidade e entrega funcional:
-> - **Serviços Externos:** Foram removidos o **Frontend Web (Dashboard React)** e o **Banco Poliglota (SQL + NoSQL)**, adotando-se um **Banco de Dados único**. A integração de mensageria mudou de **WhatsApp** para **Telegram (Bot API)** por ter API oficial mais simples e confiável.
-> - **Hardware Embarcado:** O ESP32-S3 inicial apresentou defeito físico e foi substituído pelo **ESP32 DevKit v1 (ESP-WROOM-32)**; o leitor RFID físico adquirido utiliza **I2C (`0x28`)**; e o **Display OLED 1.3"** permanece documentado como especificação de projeto (com explicação do seu funcionamento previsto), pois sofreu queima física do painel durante os testes de bancada.
+A solução integra hardware (dispositivo IoT/Embarcado com **ESP32 DevKit v1** e **Leitor RFID I2C**) com um **Backend REST em Go** hospedado na **Vercel**, persistência em **PostgreSQL** na **Neon** e um **Bot do Telegram** para automatizar o registro de presença dos docentes nas salas de aula e laboratórios do campus, enviando avisos automáticos para os grupos das turmas no Telegram.
 
 ```
-+-------------------+       Wi-Fi       +-------------------+     Bot API     +-------------------+
-| Leitor Embarcado  | ----------------> |    Backend REST   | --------------> |  Alerta Telegram  |
-| (ESP32 + RFID I2C)|                   +---------+---------+                 +-------------------+
-+-------------------+                             |
-                                                  v
-                                        +-------------------+
-                                        |  Banco de Dados   |
-                                        |      (Único)      |
-                                        +-------------------+
++--------------------+      Wi-Fi      +--------------------+     Bot API     +--------------------+
+|  Leitor Embarcado  | --------------> |  Backend em Go     | --------------> |   Bot Telegram     |
+| (ESP32 + RFID I2C) |                 |     (Vercel)       |                 | (Alertas / Turmas) |
++--------------------+                 +---------+----------+                 +--------------------+
+                                                 |
+                                                 v
+                                       +--------------------+
+                                       |  PostgreSQL (Neon) |
+                                       +--------------------+
 ```
 
 ---
@@ -56,41 +51,37 @@ A solução integra hardware (dispositivo IoT/Embarcado) com um **Backend REST**
 
 1. **Aproximação da Tag:** O professor aproxima sua tag de identificação (contendo apenas UID único) do leitor instalado na sala/laboratório.
 2. **Leitura e Filtro (Debounce):** O firmware lê o UID da tag e aplica um filtro de tempo para ignorar leituras duplicadas acidentais.
-3. **Determinação de Estado (Check-in vs Check-out):**
+3. **Determinação de Estado (Entrada vs. Saída):**
    - O sistema valida a leitura combinando a **alternância automática** (1º bip = Entrada, 2º bip = Saída) com o **cruzamento da grade horária do docente** no backend (Terça-feira, 19:00, Disciplina Y, Laboratório Z).
-4. **Sinalização Local (Especificação Completa vs. Protótipo Físico):**
-   - *Na especificação completa (Wokwi/R4):* Display OLED 1.3" exibe relógio, UID e status; LEDs RGB e Buzzer sinalizam Verde + 1 Bipe curto (Sucesso), Amarelo + 2 Bipes curtos (Salvo off-line), Vermelho + 1 Bipe longo (Erro) e Azul piscando (Wi-Fi).
-   - *No protótipo físico real (após queima do display OLED):* A sinalização local ocorre pelo LED onboard do ESP32 e pelos logs no Monitor Serial, além da confirmação imediata via mensagem no **Telegram**.
+4. **Sinalização e Feedback:**
+   - No dispositivo físico, o retorno ocorre via LED onboard do ESP32 e logs no Monitor Serial, além da confirmação imediata entregue pelo Bot do Telegram.
+   - Na especificação visual do projeto, prevê-se também o uso do **Display OLED 1.3"** (exibindo relógio ao vivo, UID e confirmação `PONTO REGISTRADO!`) e sinalização via LEDs/Buzzer (simulados no Wokwi).
 5. **Envio / Retransmissão de Dados:**
-   - **Modo Conectado:** O embarcado envia os dados autenticados para a API do Backend.
-   - **Modo Off-line (Planejado):** O registro com timestamp sincronizado via **NTP/RTC** pode ser mantido em memória local e sincronizado quando a conexão restabelecer.
+   - **Modo Conectado:** O embarcado envia os dados autenticados via HTTPS (`POST /api/v1/attendance`) para a API em Go na Vercel.
+   - **Modo Off-line:** O registro com timestamp sincronizado via **NTP** é mantido em memória local e retransmitido quando a conexão restabelecer.
 6. **Validação Inteligente e Disparo do Alerta:**
-   - O backend valida a janela de tempo entre o horário da leitura da tag e o término da aula.
-   - Se uma sincronização off-line atrasada ocorrer após o horário limite da aula, o **alerta no Telegram é descartado**, mas o **registro histórico de presença permanece gravado** no banco de dados.
+   - O backend valida no **PostgreSQL (Neon)** o professor, a sala e a janela de tempo entre o horário da leitura e o término da aula.
+   - Estando dentro da janela da aula, dispara a notificação automática para o grupo da turma no **Telegram**; caso seja uma sincronização off-line atrasada após o término da aula, o alerta no Telegram é descartado, mantendo-se o registro histórico gravado no banco.
 
 ---
 
 ## 3. Especificação do Sistema Embarcado (IoT)
 
-### 3.1. Guia de Seleção e Recomendação de Hardware (Planejado vs. Adquirido)
+### 3.1. Componentes e Hardware
 
-Para auxiliar o grupo na compra dos componentes físicos na etapa R3, cada item abaixo possui a **Opção Recomendada (A)** e a **Opção Econômica (B)** do planejamento original, seguido do comparativo com o **hardware real utilizado na versão final**:
-
-| Componente | Opção Recomendada (A) | Opção Econômica (B) | Preço Estimado (A / B) | Justificativa Técnica & Comparativo |
-| :--- | :--- | :--- | :--- | :--- |
-| **Microcontrolador** | **ESP32 DevKit v1 (ESP32-WROOM-32)** | **NodeMCU ESP8266 v3** | ~R$ 38,00 / ~R$ 24,00 | **Adotado (ESP32 DevKit v1):** Processador Dual-Core (240 MHz), 520KB SRAM, Wi-Fi, Bluetooth e suporte a FreeRTOS. *(Obs.: na etapa R3 chegou-se a adquirir um ESP32-S3 DevKitC-1, mas após defeito físico constatado em bancada, o grupo substituiu pelo ESP32 DevKit v1).* |
-| **Leitor RFID/NFC** | **Módulo PN532 NFC/RFID** | **Módulo RFID-RC522 (13.56 MHz)** | ~R$ 45,00 / ~R$ 16,00 | **Adotado (Módulo MFRC522 I2C Emakefun):** Opera em 13.56 MHz lendo cartões/tags Mifare 1K e NTAG215 com comunicação **I2C** (endereço `0x28`), economizando pinos em relação ao SPI. |
-| **Display OLED *(Planejado)*** | **Display OLED 1.3" I2C (SH1106/SSD1306)** | **Display OLED 0.96" I2C** | ~R$ 26,00 / ~R$ 18,00 | **Documentado (Não ativo no protótipo físico):** Projetado para mostrar relógio NTP/RTC, status Wi-Fi e confirmação visual (`PONTO REGISTRADO!`, UID e hora). Durante a bancada o painel OLED sofreu dano físico (circuito de alta voltagem não acende mais, embora o chip `0x3C` ainda responda), ficando documentado o seu uso previsto. |
-| **Relógio RTC *(Opcional)*** | **Módulo RTC DS3231 + Bateria CR2032** | **Módulo RTC DS1307** | ~R$ 20,00 / ~R$ 10,00 | **Substituído por NTP + Relógio Interno:** Na versão conectada via Wi-Fi, o ESP32 sincroniza a hora exata via servidor **NTP** (`pool.ntp.org`), dispensando módulo externo no protótipo atual. |
-| **LED RGB e Buzzer *(Simulados)*** | **Módulo WS2812B + Buzzer Passivo** | **LED RGB 4 Pinos + Buzzer Ativo** | ~R$ 12,00 / ~R$ 6,00 | **Mantidos na especificação/simulação (Wokwi/R4):** No protótipo físico enxuto, o retorno acontece no Monitor Serial, LED onboard da placa e mensagem imediata no **Telegram**. |
-| **Fonte de Energia** | **Cabo USB-C / Fonte 5V 2A** | **Fonte Genérica 5V 1A USB** | ~R$ 22,00 / ~R$ 12,00 | **Adotado:** Alimentação USB estável (5V) garantindo operação sem *Brownout Reset*. |
+| Componente | Modelo Adotado | Função no Sistema |
+| :--- | :--- | :--- |
+| **Microcontrolador** | **ESP32 DevKit v1 (ESP-WROOM-32, 30 pinos)** | Unidade central de processamento (Dual-Core 240 MHz, Wi-Fi integrado, suporte a FreeRTOS). Gerencia o leitor RFID, relógio NTP e envio HTTP REST para a API na Vercel. |
+| **Leitor RFID/NFC** | **Módulo RFID MFRC522 I2C (13.56 MHz, `0x28`)** | Leitura sem contato dos cartões/crachás dos professores via barramento I2C. |
+| **Tags / Crachás** | **Cartões/Tags RFID 13.56 MHz (Mifare 1K / NTAG215)** | Identificação individual de cada docente através de UID único. |
+| **Display OLED *(Especificação)*** | **Display OLED 1.3" I2C 128x64 (SH1106/SSD1306, `0x3C`)** | Interface visual prevista no projeto para exibir relógio ao vivo, status de conexão e confirmação de leitura (`PONTO REGISTRADO!`, UID e hora). *(Nota física: o painel de vidro do módulo apresentou queima durante testes em bancada, não integrando a montagem física final).* |
+| **Fonte de Energia** | **Alimentação USB 5V estável (Cabo USB-C)** | Alimentação do ESP32 (`VIN` 5V) e do módulo RFID, prevenindo reinicializações por queda de tensão (*Brownout Reset*). |
 
 ---
 
 ### 3.2. Mapeamento de Pinos e Conexões (Pinout)
 
-#### A) Pinout Físico Real Utilizado (Protótipo Final: ESP32 DevKit v1 + RFID I2C)
-Ligação direta ponto a ponto (com cabos Fêmea-Fêmea, evitando folgas de protoboard):
+Ligação direta ponto a ponto no **ESP32 DevKit v1** (cabos Fêmea-Fêmea):
 
 | Periférico | Pino no Componente | Pino no ESP32 DevKit v1 | Função / Protocolo |
 | :--- | :--- | :--- | :--- |
@@ -98,21 +89,10 @@ Ligação direta ponto a ponto (com cabos Fêmea-Fêmea, evitando folgas de prot
 | | `G` | **`GND`** *(topo direito)* | Terra |
 | | `SDA` | **`GPIO 27` (`D27`)** | I2C Data (`Wire1` / endereço `0x28`) |
 | | `SCL` | **`GPIO 26` (`D26`)** | I2C Clock (`Wire1` / endereço `0x28`) |
-| **Display OLED 1.3" *(Planejado)*** | `VCC` / `GND` | `3V3` / `GND` *(topo esquerdo)* | Alimentação 3.3V *(documentado)* |
+| **Display OLED 1.3" *(Especificação)*** | `VCC` / `GND` | `3V3` / `GND` *(topo esquerdo)* | Alimentação 3.3V |
 | | `SDA` / `SCL` | `GPIO 21` (`D21`) / `GPIO 22` (`D22`) | I2C padrão (`Wire` / endereço `0x3C`) |
 
-#### B) Pinout de Referência da Especificação Completa / Simulação Wokwi (Etapa R4)
-Para fins de comparação com a montagem virtual no Wokwi ([`wokwi_project/diagram.json`](./wokwi_project/diagram.json)):
-
-| Periférico | Pino no Componente | Pino no ESP32 (GPIO) | Função / Protocolo |
-| :--- | :--- | :--- | :--- |
-| **RFID RC522 (SPI simulado)** | VCC / GND | 3.3V / GND | Alimentação Lógica (3.3V) |
-| | SDA (SS) / RST | **GPIO 5** / **GPIO 4** | SPI Chip Select / Reset |
-| | SCK / MOSI / MISO | **GPIO 18 / 23 / 19** | Barramento SPI |
-| **Display OLED / RTC DS3231** | SDA / SCL | **GPIO 21** / **GPIO 22** | I2C Padrão ESP32 |
-| **LEDs Feedback (Simulado)** | Verde / Amarelo / Vermelho | **GPIO 13 / 2 / 15** | Saída Digital |
-| **Buzzer Passivo (Simulado)** | Signal | **GPIO 12** | Controle PWM (Som) |
-| **Botão Reset Wi-Fi (Simulado)**| Terminal A | **GPIO 14** | Botão Físico (Pull-up Interno) |
+> *(Para a configuração de pinos usada na simulação virtual do Wokwi com LEDs, Buzzer e RFID SPI, consulte [`Wokwi_project/diagram.json`](./Wokwi_project/diagram.json)).*
 
 ---
 
@@ -224,14 +204,12 @@ A comunicação entre o Embarcado e o Backend ocorrerá via **HTTP REST** (Porta
 
 ---
 
-### 3.6. Provisionamento Wi-Fi, Sincronização NTP & RTC
+### 3.6. Provisionamento Wi-Fi & Sincronização NTP
 
 1. **Portal Cativo para Configuração de Wi-Fi (WiFiManager):**
-   - Caso o leitor não consiga se conectar a nenhuma rede Wi-Fi conhecida ou o botão de reset (GPIO 14) seja pressionado por 5 segundos, o ESP32 entra no modo **Access Point** criando a rede `Presenca-Device-Setup`.
-   - O usuário/técnico conecta o celular nesta rede e uma página web abre automaticamente para selecionar o SSID da faculdade e digitar a senha.
-2. **Sincronização de Data/Hora (NTP vs RTC):**
-   - Ao conectar à internet, o ESP32 consulta o servidor NTP (`pool.ntp.org`) e atualiza o relógio interno do microcontrolador e o módulo físico **RTC DS3231**.
-   - Se o ESP32 reiniciar em local **sem internet**, ele lê a hora exata mantida pela bateria do **RTC DS3231**, garantindo timestamps confiáveis nos registros off-line.
+   - Caso o leitor não consiga se conectar a nenhuma rede Wi-Fi conhecida, o ESP32 entra no modo **Access Point** criando uma rede de configuração para selecionar o SSID local e digitar a senha.
+2. **Sincronização de Data/Hora (NTP):**
+   - Ao conectar à internet, o ESP32 consulta o servidor NTP (`pool.ntp.org`) e mantém o relógio interno atualizado (GMT-3) para registro dos timestamps de leitura.
 
 ---
 
@@ -264,7 +242,7 @@ A comunicação entre o Embarcado e o Backend ocorrerá via **HTTP REST** (Porta
 | **RF-EMB-03** | Sinalização Visual via LED RGB | O firmware deve acionar o LED RGB indicando o estado atual da operação (Verde: Sucesso/On-line; Amarelo: Off-line; Vermelho: Erro; Azul: Conectando Wi-Fi). |
 | **RF-EMB-04** | Sinalização Sonora via Buzzer | O firmware deve emitir padrões sonoros distintos (1 bipe curto: Sucesso; 2 bipes curtos: Off-line; 1 bipe longo: Erro de leitura/conexão). |
 | **RF-EMB-05** | Envio de Eventos de Presença | O sistema deve transmitir para o Backend o `UID` da tag, o `Token/ID` do dispositivo e a `data/hora` da leitura. |
-| **RF-EMB-06** | Sincronização NTP & RTC | O sistema embarcado deve sincronizar seu relógio interno via NTP sempre que houver internet e atualizar o módulo RTC DS3231. |
+| **RF-EMB-06** | Sincronização NTP | O sistema embarcado deve sincronizar seu relógio interno via servidor NTP (`pool.ntp.org`) sempre que houver conexão com a internet. |
 | **RF-EMB-07** | Armazenamento Off-line | Em caso de ausência de rede Wi-Fi, o leitor deve salvar a leitura com timestamp local na memória não-volátil interna (LittleFS). |
 | **RF-EMB-08** | Retransmissão pós-Reconexão | Ao restabelecer a conexão Wi-Fi, o leitor deve retransmitir automaticamente os registros salvos em memória para o backend na ordem cronológica. |
 | **RF-EMB-09** | Envio de Telemetria (*Heartbeat*) | O leitor deve enviar pings de status a cada N minutos informando que está ativo (*Online, Nível de Sinal Wi-Fi RSSI, Uptime, Heap Livre*). |
@@ -294,30 +272,32 @@ A comunicação entre o Embarcado e o Backend ocorrerá via **HTTP REST** (Porta
 | **TST-EMB-02** | Filtro de Debounce | Aproximar a mesma tag 3 vezes em menos de 5 segundos. | Apenas a 1ª leitura é processada. As 2 leituras seguintes são ignoradas. |
 | **TST-EMB-03** | Transição para Off-line | Desligar o roteador Wi-Fi e aproximar a tag. | LED pisca Amarelo + 2 bipes curtos. Evento gravado na Flash LittleFS. |
 | **TST-EMB-04** | Sincronização pós-Reconexão| Religar o Wi-Fi após acumular 5 leituras off-line. | O leitor reconecta e envia os 5 registros em lote para o backend. |
-| **TST-EMB-05** | Boot Off-line sem Internet | Desligar a energia e ligar novamente sem rede Wi-Fi. | O relógio mantém a hora correta usando a bateria do RTC DS3231. |
+| **TST-EMB-05** | Reconexão e Sincronização de Horário | Desligar a energia e religar com conexão Wi-Fi ativa. | O ESP32 reconecta automaticamente e sincroniza a hora exata via NTP. |
 
 ---
 
 ## 4. Arquitetura de Software e Persistência
 
-### 4.1. Backend
-* **Função:** API REST central que recebe as leituras do ESP32 (`device_id`, `tag_uid`, `timestamp`), identifica o docente e a sala correspondente, verifica a grade horária/regra de Entrada ou Saída, grava o registro no banco de dados e aciona o bot de mensagens.
-* **Integrador Telegram (substituindo WhatsApp):** Envio automático de notificações para o grupo/chat da turma usando a **Telegram Bot API** (mais simples, oficial e direta do que soluções não oficiais de WhatsApp).
+### 4.1. Backend (Go na Vercel)
+* **Linguagem & Runtime:** **Go** executado como *Serverless Functions* na plataforma **Vercel**.
+* **Responsabilidades:**
+  * Receber os eventos de leitura enviados pelo ESP32 via API REST/HTTPS (`/api/v1/attendance`, `/api/v1/attendance/sync-batch`, `/api/v1/telemetry/heartbeat`) validando o cabeçalho de autenticação `X-Device-Token`.
+  * Consultar e persistir dados no banco **PostgreSQL (Neon)**.
+  * Cruzar o `tag_uid` do professor e o `device_id` da sala com a grade horária para determinar Entrada/Saída e validar a janela da aula.
+  * Acionar a **API do Telegram** para notificar os grupos das turmas.
 
-### 4.2. Frontend *(Escopo Removido)*
-* O Dashboard Web em `React + TypeScript` previsto inicialmente na especificação foi **removido** nesta versão final para concentrar os esforços no fluxo completo: **ESP32 + Leitor RFID → Backend → Banco de Dados → Bot Telegram**.
+### 4.2. Banco de Dados (PostgreSQL na Neon)
+* **Banco de Dados Único:** **PostgreSQL** gerenciado na nuvem pela **Neon** (compatível com execução *serverless* na Vercel).
+* **Dados Armazenados:** Cadastros de professores e tags UID, salas/blocos e dispositivos ESP32, turmas, disciplinas, grades horárias, histórico de presenças (entradas/saídas) e logs de telemetria/eventos.
 
-### 4.3. Banco de Dados *(Persistência Única)*
-* A abordagem inicial de **Banco Poliglota (SQL + NoSQL)** foi substituída por um **Banco de Dados único** para reduzir complexidade operacional, armazenando tanto os cadastros base (professores, tags, salas e horários) quanto os registros de presença/eventos de chegada e saída *(tecnologia exata a ser definida na etapa de implementação do Backend)*.
+### 4.3. Notificações (Telegram Bot API)
+* **Integração:** Chamada HTTP direta do backend em Go para a **Telegram Bot API** (`sendMessage`), enviando automaticamente os avisos de chegada/saída dos professores nos grupos das respectivas turmas.
 
 ---
 
 ## 5. Próximos Passos
 
-- [x] Especificar regras de negócio e firmware do Sistema Embarcado.
-- [x] Mapear Requisitos Funcionais (RF-EMB) e Não-Funcionais (RNF-EMB) do Sistema Embarcado.
-- [x] Definir contrato de dados (Payloads JSON), pinout físico e matriz de componentes do Embarcado.
-- [x] Adquirir e validar fisicamente o hardware (**ESP32 DevKit v1** + **Leitor RFID MFRC522 I2C**).
-- [x] Revisar escopo final para a apresentação (sem Frontend, sem Banco Poliglota, utilizando **Telegram**).
-- [ ] Limpar arquivos temporários do repositório e atualizar o código final do ESP32 com envio Wi-Fi/HTTP.
-- [ ] Definir detalhes e implementar **Backend**, **Banco de Dados único** e integração com **Bot do Telegram**.
+- [x] Definir arquitetura completa: **ESP32 DevKit v1 + RFID I2C** → **Go (Vercel)** → **PostgreSQL (Neon)** + **Bot Telegram**.
+- [x] Validar fisicamente o hardware (**ESP32 DevKit v1** + **Leitor RFID MFRC522 I2C**).
+- [ ] Limpar arquivos temporários do repositório e atualizar o firmware final do ESP32 com conexão Wi-Fi e envio HTTP para a API.
+- [ ] Modelar as tabelas no **PostgreSQL (Neon)** e implementar os endpoints em **Go** na **Vercel** integrados ao **Bot do Telegram**.
