@@ -1,0 +1,27 @@
+# Arquivo de exclusão do Git para o backend em Go (pasta Backend).
+# Impede o envio de variáveis de ambiente com senhas, binários compilados,
+# pastas locais da Vercel e arquivos temporários de teste para o GitHub.
+
+# Variáveis de ambiente locais (mantém apenas .env.example no repositório)
+.env
+.env.*
+!.env.example
+
+# Binários compilados e artefatos de build/testes em Go
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.txt
+servidor
+bin/
+dist/
+
+# Arquivos locais gerados pela CLI da Vercel
+.vercel/
+
+# Arquivos temporários do sistema operacional
+.DS_Store
+Thumbs.db
