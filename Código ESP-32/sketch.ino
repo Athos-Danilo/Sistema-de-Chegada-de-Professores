@@ -1,260 +1,327 @@
-/*
- * SCP - Sistema de Chegada de Professores (Firmware IoT ESP32)
- * Disciplina: Sistemas Embarcados - Prof. Lauro Alves
- * Alunos: Athos, Alessandro, Joseph e José E.
- *
- * Entrega R5: Programação e leitura dos sensores
- * Código fonte atendendo aos requisitos A até F do PDF de entrega.
- */
+// Firmware IoT do Sistema de Chegada de Professores (SCP) para ESP32 DevKit v1.
+// Realiza leitura de crachás RFID via barramento I2C (MFRC522), sincroniza relógio NTP,
+// mantém fila off-line em caso de queda de Wi-Fi e envia eventos via HTTPS REST para a API na Vercel.
+// Projeto desenvolvido para o IFPE Campus Garanhuns (Athos, Joseph, José e Alessandro).
 
-#include <SPI.h>
-#include <MFRC522.h>
-#include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <Wire.h>
+#include <MFRC522_I2C.h>
 #include <time.h>
 
+// --- CONFIGURAÇÕES DE REDE E NUVEM ---
+const char* WIFI_SSID         = "SEU_WIFI_AQUI";
+const char* WIFI_SENHA        = "SUA_SENHA_AQUI";
+
+const char* URL_BASE_API      = "https://scp-three-blue.vercel.app";
+const char* ID_DISPOSITIVO    = "EMB-LAB-01";
+const char* TOKEN_DISPOSITIVO = "scp-token-seguro-2026";
+const char* VERSAO_FIRMWARE   = "scp-esp32-i2c-1.0.0";
+
+const char* SERVIDOR_NTP      = "pool.ntp.org";
+const long  FUSO_HORARIO_SEG  = -10800; // GMT-3 (America/Recife)
+
 // --- A. configuração dos pinos ---
-// Definição dos pinos para os sensores, atuadores e interface
-#define SS_PIN          5   // Pino SDA (SS) do RFID
-#define RST_PIN         4   // Pino RST do RFID
-#define LED_GREEN_PIN   13  // Atuador: LED Verde
-#define LED_YELLOW_PIN  2   // Atuador: LED Amarelo
-#define LED_RED_PIN     15  // Atuador: LED Vermelho
-#define BUZZER_PIN      12  // Atuador: Buzzer Passivo
-#define BTN_RESET_PIN   14  // Sensor/Entrada: Botão de Reset/Simulação
+const uint8_t PINO_SDA_I2C      = 27;   // Pino SDA conectado ao leitor MFRC522 I2C
+const uint8_t PINO_SCL_I2C      = 26;   // Pino SCL conectado ao leitor MFRC522 I2C
+const uint8_t PINO_RST_RFID     = 25;   // Pino auxiliar mantido em LOW antes do PCD_Init()
+const uint8_t ENDERECO_RFID_I2C = 0x28; // Endereço I2C padrão do módulo MFRC522
+const uint8_t PINO_LED_STATUS   = 2;    // LED azul integrado na placa ESP32 DevKit v1
 
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-#define OLED_RESET -1
-
-// Instanciação de objetos do Display e Leitor RFID
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-MFRC522 rfid(SS_PIN, RST_PIN);
+// --- B. inicialização dos sensores ---
+MFRC522_I2C leitorRfid(ENDERECO_RFID_I2C, PINO_RST_RFID, &Wire);
 
 // --- C. variáveis utilizadas ---
-// Variáveis para regras de negócio e controle de estado
-String last_uid = "";
-unsigned long last_read_time = 0;
-const unsigned long DEBOUNCE_DELAY = 10000; // Tempo de filtro para evitar múltiplas leituras seguidas (10s)
-bool is_registered_in = false;              // Variável booleana para alternar entre Entrada e Saída
-bool wasOffline = false;                    // Controla o estado anterior da conexão Wi-Fi
+struct RegistroPendente {
+  String uidTag;
+  int64_t carimboTempo;
+};
 
-// Variáveis para configuração de rede e NTP
-const char* ssid = "Wokwi-GUEST";
-const char* password = "";
-const char* ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = -10800; // GMT-3 (Horário de Brasília)
-const int daylightOffset_sec = 0;
+const size_t MAX_FILA_OFFLINE              = 32;
+const unsigned long TEMPO_DEBOUNCE_MS      = 10000; // Evita leituras repetidas do mesmo crachá por 10s
+const unsigned long INTERVALO_HEARTBEAT_MS = 60000; // Telemetria a cada 60 segundos
+const unsigned long INTERVALO_WIFI_MS      = 15000; // Tentativa de reconexão Wi-Fi a cada 15s
 
-// Função para acionamento do atuador sonoro
-void playBuzzerBeep(int frequency, int durationMs, int times = 1) {
-  for (int i = 0; i < times; i++) {
-    // --- F. acionamento de atuadores, quando houver ---
-    // Acionamento do Buzzer via PWM (função tone)
-    tone(BUZZER_PIN, frequency, durationMs);
-    delay(durationMs + 50);
+RegistroPendente filaOffline[MAX_FILA_OFFLINE];
+size_t totalPendentesOffline = 0;
+
+String ultimoUidLido                  = "";
+unsigned long instanteUltimaLeituraMs = 0;
+unsigned long ultimoHeartbeatMs       = 0;
+unsigned long ultimaTentativaWifiMs   = 0;
+bool ntpSincronizado                  = false;
+
+// --- F. acionamento de atuadores/feedback ---
+// Pisca o LED integrado da placa para confirmar leitura, envio ou erro sem travar o sistema.
+void sinalizarLedStatus(uint8_t repeticoes, int duracaoMs) {
+  for (uint8_t i = 0; i < repeticoes; i++) {
+    digitalWrite(PINO_LED_STATUS, HIGH);
+    delay(duracaoMs);
+    digitalWrite(PINO_LED_STATUS, LOW);
+    delay(duracaoMs);
   }
 }
 
-// Função auxiliar para mostrar mensagens no display OLED
-void showScreenMessage(String title, String line1, String line2, String line3) {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.print("== ");
-  display.print(title);
-  display.println(" ==");
-  display.drawFastHLine(0, 10, 128, SSD1306_WHITE);
-  display.setCursor(0, 16);
-  display.println(line1);
-  display.setCursor(0, 30);
-  display.println(line2);
-  display.setCursor(0, 44);
-  display.println(line3);
-  display.display();
+// Formata os bytes do UID lido pelo MFRC522 no padrão hexadecimal AA:BB:CC:DD.
+String formatarUidTag() {
+  String uidFormatado = "";
+  for (byte i = 0; i < leitorRfid.uid.size; i++) {
+    if (i > 0) {
+      uidFormatado += ":";
+    }
+    if (leitorRfid.uid.uidByte[i] < 0x10) {
+      uidFormatado += "0";
+    }
+    uidFormatado += String(leitorRfid.uid.uidByte[i], HEX);
+  }
+  uidFormatado.toUpperCase();
+  return uidFormatado;
+}
+
+// Obtém o timestamp Unix atual via NTP (retorna 0 caso o relógio ainda não esteja sincronizado).
+int64_t obterTimestampUnixAtual() {
+  time_t agora = time(nullptr);
+  if (agora < 1700000000LL) {
+    return 0;
+  }
+  return static_cast<int64_t>(agora);
+}
+
+// Conecta ao Wi-Fi configurado e sincroniza o horário via NTP.
+void conectarWifiESincronizarNtp() {
+  if (WiFi.status() == WL_CONNECTED) {
+    return;
+  }
+
+  Serial.printf("[WIFI] Conectando na rede \"%s\"...\n", WIFI_SSID);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_SENHA);
+
+  unsigned long inicio = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - inicio < 12000) {
+    delay(300);
+    Serial.print(".");
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("[WIFI] Conectado! IP local: ");
+    Serial.println(WiFi.localIP());
+
+    if (!ntpSincronizado) {
+      configTime(FUSO_HORARIO_SEG, 0, SERVIDOR_NTP, "a.st1.ntp.br");
+      Serial.print("[NTP] Sincronizando relogio");
+      for (int tentativa = 0; tentativa < 20; tentativa++) {
+        if (obterTimestampUnixAtual() > 0) {
+          ntpSincronizado = true;
+          break;
+        }
+        delay(250);
+        Serial.print(".");
+      }
+      Serial.println(ntpSincronizado ? " OK!" : " aguardando em segundo plano.");
+    }
+  } else {
+    Serial.println("[WIFI] Sem conexao no momento. Operando em modo off-line.");
+  }
+}
+
+// Executa requisição HTTPS POST autenticada para a API REST em Go na Vercel.
+// Retorna o código HTTP recebido (> 0) ou valor negativo em caso de erro de rede/Wi-Fi.
+int enviarRequisicaoPostJson(const String& rota, const String& payloadJson, String& respostaCorpo) {
+  if (WiFi.status() != WL_CONNECTED) {
+    return -1;
+  }
+
+  WiFiClientSecure clienteSeguro;
+  clienteSeguro.setInsecure();
+
+  HTTPClient http;
+  String urlCompleta = String(URL_BASE_API) + rota;
+  if (!http.begin(clienteSeguro, urlCompleta)) {
+    Serial.println("[HTTP] Falha ao iniciar cliente HTTPS.");
+    return -2;
+  }
+
+  http.setTimeout(10000);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("X-Device-Token", TOKEN_DISPOSITIVO);
+
+  int codigoHttp = http.POST(payloadJson);
+  if (codigoHttp > 0) {
+    respostaCorpo = http.getString();
+    Serial.printf("[HTTP] POST %s -> %d | %s\n", rota.c_str(), codigoHttp, respostaCorpo.c_str());
+  } else {
+    Serial.printf("[HTTP] Erro na requisicao POST %s: %s\n", rota.c_str(), http.errorToString(codigoHttp).c_str());
+  }
+
+  http.end();
+  return codigoHttp;
+}
+
+// Enfileira uma leitura em memória caso a conexão Wi-Fi ou nuvem falhe temporariamente.
+void enfileirarLeituraOffline(const String& uidTag, int64_t carimboTempo) {
+  if (totalPendentesOffline >= MAX_FILA_OFFLINE) {
+    Serial.println("[OFFLINE] Fila cheia! Descartando leitura mais antiga.");
+    for (size_t i = 1; i < MAX_FILA_OFFLINE; i++) {
+      filaOffline[i - 1] = filaOffline[i];
+    }
+    totalPendentesOffline = MAX_FILA_OFFLINE - 1;
+  }
+
+  filaOffline[totalPendentesOffline].uidTag = uidTag;
+  filaOffline[totalPendentesOffline].carimboTempo = carimboTempo;
+  totalPendentesOffline++;
+  Serial.printf("[OFFLINE] Leitura salva na fila local (%u pendentes).\n", static_cast<unsigned>(totalPendentesOffline));
+}
+
+// Envia todas as leituras armazenadas na fila off-line em lote para a Vercel.
+void sincronizarFilaOffline() {
+  if (totalPendentesOffline == 0 || WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  String payload = "{";
+  payload += "\"device_id\":\"" + String(ID_DISPOSITIVO) + "\",";
+  payload += "\"batch_count\":" + String(totalPendentesOffline) + ",";
+  payload += "\"records\":[";
+
+  for (size_t i = 0; i < totalPendentesOffline; i++) {
+    if (i > 0) {
+      payload += ",";
+    }
+    payload += "{\"tag_uid\":\"" + filaOffline[i].uidTag + "\",";
+    payload += "\"read_timestamp\":" + String(static_cast<long long>(filaOffline[i].carimboTempo)) + "}";
+  }
+  payload += "]}";
+
+  String resposta;
+  int codigoHttp = enviarRequisicaoPostJson("/api/v1/attendance/sync-batch", payload, resposta);
+  if (codigoHttp >= 200 && codigoHttp < 300) {
+    Serial.printf("[OFFLINE] Lote sincronizado com sucesso (%u registros).\n", static_cast<unsigned>(totalPendentesOffline));
+    totalPendentesOffline = 0;
+    sinalizarLedStatus(2, 100);
+  }
+}
+
+// Envia uma leitura em tempo real para a API ou armazena na fila off-line se houver queda de rede.
+void processarEnvioPresenca(const String& uidTag) {
+  int64_t carimboTempo = obterTimestampUnixAtual();
+  int rssi = (WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0;
+
+  String payload = "{";
+  payload += "\"device_id\":\"" + String(ID_DISPOSITIVO) + "\",";
+  payload += "\"tag_uid\":\"" + uidTag + "\",";
+  payload += "\"read_timestamp\":" + String(static_cast<long long>(carimboTempo)) + ",";
+  payload += "\"rssi\":" + String(rssi) + ",";
+  payload += "\"is_offline_record\":false";
+  payload += "}";
+
+  String resposta;
+  int codigoHttp = enviarRequisicaoPostJson("/api/v1/attendance", payload, resposta);
+  if (codigoHttp >= 200 && codigoHttp < 300) {
+    Serial.println("[SCP] Presenca confirmada na nuvem e notificada no Telegram!");
+    sinalizarLedStatus(3, 80);
+  } else if (codigoHttp >= 400 && codigoHttp < 500) {
+    Serial.printf("[SCP] Leitura recusada pela API (HTTP %d). Verifique cadastro da tag/token.\n", codigoHttp);
+    sinalizarLedStatus(5, 60);
+  } else {
+    enfileirarLeituraOffline(uidTag, carimboTempo);
+    sinalizarLedStatus(1, 450);
+  }
+}
+
+// Envia telemetria periódica de saúde (heartbeat) do ESP32 para monitoramento no PostgreSQL.
+void enviarTelemetriaHeartbeat() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  unsigned long tempoAtivoSeg = millis() / 1000;
+  String payload = "{";
+  payload += "\"device_id\":\"" + String(ID_DISPOSITIVO) + "\",";
+  payload += "\"firmware_version\":\"" + String(VERSAO_FIRMWARE) + "\",";
+  payload += "\"uptime_seconds\":" + String(tempoAtivoSeg) + ",";
+  payload += "\"wifi_rssi\":" + String(WiFi.RSSI()) + ",";
+  payload += "\"free_heap_bytes\":" + String(ESP.getFreeHeap()) + ",";
+  payload += "\"offline_pending_count\":" + String(totalPendentesOffline);
+  payload += "}";
+
+  String resposta;
+  enviarRequisicaoPostJson("/api/v1/telemetry/heartbeat", payload, resposta);
 }
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n[SCP] Inicializando Sistema...");
+  delay(200);
+  Serial.println("\n=== SCP - Sistema de Chegada de Professores (ESP32 + MFRC522 I2C) ===");
 
   // --- A. configuração dos pinos ---
-  // Definindo se os pinos atuarão como entrada (sensores/botões) ou saída (atuadores)
-  pinMode(LED_GREEN_PIN, OUTPUT);
-  pinMode(LED_YELLOW_PIN, OUTPUT);
-  pinMode(LED_RED_PIN, OUTPUT);
-  pinMode(BUZZER_PIN, OUTPUT);
-  pinMode(BTN_RESET_PIN, INPUT_PULLUP);
+  pinMode(PINO_LED_STATUS, OUTPUT);
+  digitalWrite(PINO_LED_STATUS, LOW);
 
-  // Inicializando atuadores desligados
-  digitalWrite(LED_GREEN_PIN, LOW);
-  digitalWrite(LED_YELLOW_PIN, LOW);
-  digitalWrite(LED_RED_PIN, LOW);
+  // Mantém PINO_RST_RFID em LOW antes do PCD_Init para evitar travamento no SoftReset I2C.
+  pinMode(PINO_RST_RFID, OUTPUT);
+  digitalWrite(PINO_RST_RFID, LOW);
 
   // --- B. inicialização dos sensores ---
-  // Inicialização do barramento I2C e Display OLED
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println(F("[ERRO] Falha ao inicializar o Display OLED SSD1306!"));
-    for (;;);
-  }
-  
-  showScreenMessage("SCP - IFPE", "Inicializando...", "Conectando Wi-Fi", "Aguarde...");
+  Wire.begin(PINO_SDA_I2C, PINO_SCL_I2C);
+  leitorRfid.PCD_Init();
+  Serial.print("[RFID] Versao do leitor I2C: ");
+  leitorRfid.PCD_DumpVersionToSerial();
 
-  // --- B. inicialização dos sensores ---
-  // Inicialização do barramento SPI e do Leitor RFID MFRC522
-  SPI.begin();
-  rfid.PCD_Init();
-  Serial.println("[OK] Leitor RFID MFRC522 Inicializado com sucesso!");
+  conectarWifiESincronizarNtp();
+  ultimoHeartbeatMs = millis();
 
-  // Inicialização do Wi-Fi
-  WiFi.begin(ssid, password);
-  int wifi_attempts = 0;
-  
-  // --- E. estruturas condicionais utilizadas ---
-  // Estrutura de repetição condicional para aguardar conexão
-  while (WiFi.status() != WL_CONNECTED && wifi_attempts < 10) {
-    delay(300);
-    Serial.print(".");
-    wifi_attempts++;
-  }
-
-  // --- E. estruturas condicionais utilizadas ---
-  // Verifica se o dispositivo está conectado à internet
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n[OK] Wi-Fi Conectado!");
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-    wasOffline = false;
-  } else {
-    Serial.println("\n[AVISO] Conexão Wi-Fi falhou! Operando em modo offline.");
-    // --- F. acionamento de atuadores, quando houver ---
-    // Acionamento do LED Amarelo para indicar estado Offline
-    digitalWrite(LED_YELLOW_PIN, HIGH);
-    playBuzzerBeep(1200, 100, 2);
-    wasOffline = true;
+    enviarTelemetriaHeartbeat();
   }
-
-  playBuzzerBeep(1000, 100, 2); // 2 bipes indicando inicialização completa
-  if (wasOffline) {
-    showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "na entrada da sala", "Status: OFFLINE");
-  } else {
-    showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "na entrada da sala", "Status: ONLINE");
-  }
-}
-
-// Retorna o horário formatado utilizando NTP
-String getFormattedTime() {
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
-    return "19:00:00"; // Fallback para demonstração sem internet
-  }
-  char timeStringBuff[15];
-  strftime(timeStringBuff, sizeof(timeStringBuff), "%H:%M:%S", &timeinfo);
-  return String(timeStringBuff);
-}
-
-// Processa a leitura da tag RFID
-void processTag(String uid) {
-  unsigned long now = millis();
-  
-  // --- E. estruturas condicionais utilizadas ---
-  // Condicional de validação: Filtro de Debounce para não ler a mesma tag múltiplas vezes muito rápido
-  if (uid == last_uid && (now - last_read_time < DEBOUNCE_DELAY)) {
-    Serial.println("[DEBOUNCE] Leitura duplicada ignorada.");
-    return;
-  }
-
-  last_uid = uid;
-  last_read_time = now;
-  is_registered_in = !is_registered_in; // Alterna entre check-in e check-out
-
-  String hora = getFormattedTime();
-  String tipo = is_registered_in ? "ENTRADA" : "SAIDA";
-  
-  Serial.print("[PRESENCA] UID: ");
-  Serial.print(uid);
-  Serial.print(" | Tipo: ");
-  Serial.print(tipo);
-  Serial.print(" | Hora: ");
-  Serial.println(hora);
-
-  // --- E. estruturas condicionais utilizadas ---
-  if (WiFi.status() == WL_CONNECTED) {
-    // --- F. acionamento de atuadores, quando houver ---
-    digitalWrite(LED_GREEN_PIN, HIGH);
-    playBuzzerBeep(2000, 150, 1); // 1 bipe de sucesso
-    showScreenMessage("REGISTRO OK!", "UID: " + uid, tipo + " registrada", "Hora: " + hora);
-    delay(2000);
-    digitalWrite(LED_GREEN_PIN, LOW); // Desliga o atuador
-  } else {
-    // --- F. acionamento de atuadores, quando houver ---
-    digitalWrite(LED_YELLOW_PIN, HIGH);
-    playBuzzerBeep(1200, 100, 2); // 2 bipes para offline
-    showScreenMessage("OFFLINE SAVED", "UID: " + uid, tipo + " (Offline)", "Hora: " + hora);
-    delay(2000);
-  }
-
-  // Retorna tela padrão
-  if (WiFi.status() == WL_CONNECTED) {
-    showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "na entrada da sala", "Status: ONLINE");
-  } else {
-    showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "na entrada da sala", "Status: OFFLINE");
-  }
+  Serial.println("[SCP] Sistema pronto! Aproxime um cracha RFID para registrar presenca.");
 }
 
 void loop() {
-  bool isOffline = (WiFi.status() != WL_CONNECTED);
-  
-  // --- E. estruturas condicionais utilizadas ---
-  if (isOffline && !wasOffline) {
-    digitalWrite(LED_YELLOW_PIN, HIGH);
-    playBuzzerBeep(1200, 100, 2); 
-    showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "Status", "OFFLINE");
-    wasOffline = true;
-  } else if (!isOffline && wasOffline) {
-    digitalWrite(LED_YELLOW_PIN, LOW);
-    playBuzzerBeep(2000, 150, 1); 
-    showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "Status", "ONLINE");
-    wasOffline = false;
+  unsigned long agoraMs = millis();
+
+  // --- E. estruturas condicionais de reconexão e sincronização ---
+  if (WiFi.status() != WL_CONNECTED && (agoraMs - ultimaTentativaWifiMs >= INTERVALO_WIFI_MS)) {
+    ultimaTentativaWifiMs = agoraMs;
+    conectarWifiESincronizarNtp();
   }
 
-  // Verifica o botão de Reset (Simulando uma falha ou setup)
-  if (digitalRead(BTN_RESET_PIN) == LOW) {
-    // --- F. acionamento de atuadores, quando houver ---
-    digitalWrite(LED_RED_PIN, HIGH);
-    playBuzzerBeep(500, 800, 1); 
-    showScreenMessage("RESET WI-FI", "Modo Portal Cativo", "Aguardando Setup", "IP: 192.168.4.1");
-    delay(3000);
-    digitalWrite(LED_RED_PIN, LOW);
-    showScreenMessage("SISTEMA PRONTO", "Aproxime seu cartao", "na entrada da sala", isOffline ? "Status: OFFLINE" : "Status: ONLINE");
+  if (WiFi.status() == WL_CONNECTED && totalPendentesOffline > 0) {
+    sincronizarFilaOffline();
   }
 
-  // --- D. comandos responsáveis pela leitura ---
-  // PICC_IsNewCardPresent() é o comando que verifica se há um sensor/tag RFID na área de leitura
-  if (!rfid.PICC_IsNewCardPresent()) {
+  if (WiFi.status() == WL_CONNECTED && (agoraMs - ultimoHeartbeatMs >= INTERVALO_HEARTBEAT_MS)) {
+    ultimoHeartbeatMs = agoraMs;
+    enviarTelemetriaHeartbeat();
+  }
+
+  // --- D. comandos responsáveis pela leitura do sensor RFID ---
+  if (!leitorRfid.PICC_IsNewCardPresent()) {
+    delay(50);
+    return;
+  }
+  if (!leitorRfid.PICC_ReadCardSerial()) {
+    delay(50);
     return;
   }
 
-  // --- D. comandos responsáveis pela leitura ---
-  // PICC_ReadCardSerial() é o comando que realiza a extração dos dados (UID) do cartão
-  if (!rfid.PICC_ReadCardSerial()) {
+  String uidLido = formatarUidTag();
+  leitorRfid.PICC_HaltA();
+  leitorRfid.PCD_StopCrypto1();
+
+  // --- E. estrutura condicional para filtro de debounce (10 segundos) ---
+  if (uidLido == ultimoUidLido && (agoraMs - instanteUltimaLeituraMs < TEMPO_DEBOUNCE_MS)) {
+    Serial.printf("[DEBOUNCE] Tag %s ignorada (leitura repetida em menos de 10s).\n", uidLido.c_str());
+    delay(300);
     return;
   }
 
-  String tagUID = "";
-  for (byte i = 0; i < rfid.uid.size; i++) {
-    tagUID += String(rfid.uid.uidByte[i] < 0x10 ? "0" : "");
-    tagUID += String(rfid.uid.uidByte[i], HEX);
-  }
-  tagUID.toUpperCase();
+  ultimoUidLido = uidLido;
+  instanteUltimaLeituraMs = agoraMs;
 
-  // Aciona a lógica de negócio principal
-  processTag(tagUID);
-
-  // --- D. comandos responsáveis pela leitura ---
-  // Finaliza a leitura da tag atual para permitir novas leituras futuras
-  rfid.PICC_HaltA();
-  rfid.PCD_StopCrypto1();
+  Serial.printf("\n[RFID] Cracha detectado! UID: %s\n", uidLido.c_str());
+  processarEnvioPresenca(uidLido);
 }
