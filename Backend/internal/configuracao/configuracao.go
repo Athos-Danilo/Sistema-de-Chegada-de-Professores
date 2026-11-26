@@ -15,6 +15,7 @@ type Configuracao struct {
 	UrlBancoDados        string
 	TokenBotTelegram     string
 	ChatIdTelegramPadrao string
+	SegredoCron          string
 	FusoHorario          *time.Location
 	PortaServidor        string
 }
@@ -32,6 +33,7 @@ func CarregarConfiguracao() (*Configuracao, error) {
 	}
 
 	chatPadrao := strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID_PADRAO"))
+	segredoCron := strings.TrimSpace(os.Getenv("CRON_SECRET"))
 
 	nomeFuso := strings.TrimSpace(os.Getenv("FUSO_HORARIO"))
 	if nomeFuso == "" {
@@ -53,6 +55,7 @@ func CarregarConfiguracao() (*Configuracao, error) {
 		UrlBancoDados:        urlBanco,
 		TokenBotTelegram:     tokenTelegram,
 		ChatIdTelegramPadrao: chatPadrao,
+		SegredoCron:          segredoCron,
 		FusoHorario:          localizacao,
 		PortaServidor:        porta,
 	}, nil

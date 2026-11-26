@@ -92,6 +92,21 @@ type ResultadoPresenca struct {
 	NotificacaoEnviada bool   `json:"notificacao_enviada"`
 }
 
+// MensagemTelegramRegistrada guarda o ID da mensagem enviada pelo bot para limpeza noturna.
+type MensagemTelegramRegistrada struct {
+	Id        int64
+	ChatId    string
+	MessageId int64
+	EnviadaEm time.Time
+}
+
+// ResultadoLimpezaTelegram resume a rotina noturna de exclusão de mensagens no Telegram.
+type ResultadoLimpezaTelegram struct {
+	MensagensEncontradas int `json:"mensagens_encontradas"`
+	MensagensApagadas    int `json:"mensagens_apagadas"`
+	RegistrosRemovidos   int `json:"registros_removidos"`
+}
+
 // RespostaAPI padroniza todas as respostas JSON devolvidas pelos endpoints HTTP.
 type RespostaAPI struct {
 	Sucesso  bool        `json:"sucesso"`

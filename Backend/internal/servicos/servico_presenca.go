@@ -133,7 +133,7 @@ func (s *ServicoPresenca) RegistrarLeitura(
 	notificacaoEnviada := false
 	deveNotificar := s.deveNotificarTelegram(req.RegistroOffline, aula, leituraLocal)
 	if deveNotificar && chatDestino != "" {
-		erroEnvio := s.notificador.EnviarAlertaPresenca(ctx, telegram.DadosNotificacao{
+		idMensagem, erroEnvio := s.notificador.EnviarAlertaPresenca(ctx, telegram.DadosNotificacao{
 			ChatId:     chatDestino,
 			Professor:  professor.Nome,
 			Sala:       dispositivo.NomeSala,
@@ -148,6 +148,11 @@ func (s *ServicoPresenca) RegistrarLeitura(
 			log.Printf("[AVISO] Falha ao enviar notificação no Telegram: %v", erroEnvio)
 		} else {
 			notificacaoEnviada = true
+			if idMensagem > 0 {
+				if erroFila := s.repositorio.RegistrarMensagemTelegram(ctx, chatDestino, idMensagem); erroFila != nil {
+					log.Printf("[AVISO] Falha ao registrar message_id para limpeza noturna: %v", erroFila)
+				}
+			}
 		}
 	}
 
@@ -224,6 +229,65 @@ func (s *ServicoPresenca) RegistrarTelemetria(
 	}
 
 	return s.repositorio.RegistrarTelemetria(ctx, dados)
+}
+
+// LimparMensagensTelegram apaga no Telegram as mensagens enviadas pelo bot e limpa a fila auxiliar,
+// mantendo 100% do histórico oficial de presenças preservado na tabela registros_presenca.
+func (s *ServicoPresenca) LimparMensagensTelegram(ctx context.Context) (*modelos.ResultadoLimpezaTelegram, error) {
+	mensagens, erro := s.repositorio.ListarMensagensTelegramParaLimpar(ctx)
+	if erro != nil {
+		return nil, erro
+	}
+
+	resultado := &modelos.ResultadoLimpezaTelegram{
+		MensagensEncontradas: len(mensagens),
+	}
+	if len(mensagens) == 0 {
+		return resultado, nil
+	}
+
+	type grupoChat struct {
+		idsTelegram []int64
+		maiorId     int64
+	}
+	porChat := make(map[string]*grupoChat)
+	ordemChats := make([]string, 0)
+	agora := s.relogio()
+	const limiteTelegram = 47*time.Hour + 50*time.Minute
+
+	for _, msg := range mensagens {
+		grupo, existe := porChat[msg.ChatId]
+		if !existe {
+			grupo = &grupoChat{}
+			porChat[msg.ChatId] = grupo
+			ordemChats = append(ordemChats, msg.ChatId)
+		}
+		if msg.Id > grupo.maiorId {
+			grupo.maiorId = msg.Id
+		}
+		if agora.Sub(msg.EnviadaEm) < limiteTelegram {
+			grupo.idsTelegram = append(grupo.idsTelegram, msg.MessageId)
+		}
+	}
+
+	for _, chatId := range ordemChats {
+		grupo := porChat[chatId]
+		if len(grupo.idsTelegram) > 0 {
+			apagadas, erroExclusao := s.notificador.ApagarMensagens(ctx, chatId, grupo.idsTelegram)
+			resultado.MensagensApagadas += apagadas
+			if erroExclusao != nil {
+				return resultado, erroExclusao
+			}
+		}
+
+		removidos, erroBanco := s.repositorio.RemoverMensagensTelegramDoChat(ctx, chatId, grupo.maiorId)
+		if erroBanco != nil {
+			return resultado, erroBanco
+		}
+		resultado.RegistrosRemovidos += removidos
+	}
+
+	return resultado, nil
 }
 
 func (s *ServicoPresenca) converterCarimboTempo(carimboUnix int64) time.Time {

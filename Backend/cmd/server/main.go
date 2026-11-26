@@ -30,6 +30,7 @@ func main() {
 	registrarRotaControlador(roteador, "/api/v1/attendance", (*controladores.ControladorAPI).TratarPresenca)
 	registrarRotaControlador(roteador, "/api/v1/attendance/sync-batch", (*controladores.ControladorAPI).TratarLotePresenca)
 	registrarRotaControlador(roteador, "/api/v1/telemetry/heartbeat", (*controladores.ControladorAPI).TratarTelemetria)
+	registrarRotaControlador(roteador, "/api/cron/limpar-telegram", (*controladores.ControladorAPI).TratarLimpezaNoturnaTelegram)
 
 	porta := strings.TrimSpace(os.Getenv("PORT"))
 	if porta == "" {

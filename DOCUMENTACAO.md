@@ -284,20 +284,24 @@ A comunicação entre o Embarcado e o Backend ocorrerá via **HTTP REST** (Porta
   * Receber os eventos de leitura enviados pelo ESP32 via API REST/HTTPS (`/api/v1/attendance`, `/api/v1/attendance/sync-batch`, `/api/v1/telemetry/heartbeat`) validando o cabeçalho de autenticação `X-Device-Token`.
   * Consultar e persistir dados no banco **PostgreSQL (Neon)**.
   * Cruzar o `tag_uid` do professor e o `device_id` da sala com a grade horária para determinar Entrada/Saída e validar a janela da aula.
-  * Acionar a **API do Telegram** para notificar os grupos das turmas.
+  * Acionar a **API do Telegram** para notificar os grupos/canais das turmas e registrar o `message_id` retornado para limpeza diária.
+  * Executar a rotina agendada de limpeza noturna (`GET /api/cron/limpar-telegram`) protegida por `Authorization: Bearer <CRON_SECRET>` via **Vercel Cron Jobs** (`0 3 * * *` UTC = **00:00** no fuso `America/Recife`).
 
 ### 4.2. Banco de Dados (PostgreSQL na Neon)
 * **Banco de Dados Único:** **PostgreSQL** gerenciado na nuvem pela **Neon** (compatível com execução *serverless* na Vercel).
-* **Dados Armazenados:** Cadastros de professores e tags UID, salas/blocos e dispositivos ESP32, turmas, disciplinas, grades horárias, histórico de presenças (entradas/saídas) e logs de telemetria/eventos.
+* **Dados Armazenados:** Cadastros de professores e tags UID (`professores`), salas/blocos e dispositivos ESP32 (`dispositivos`), turmas (`turmas`), grades horárias (`grades_horarias`), histórico permanente de presenças (`registros_presenca`), logs de telemetria (`telemetria_dispositivos`) e fila auxiliar de controle de mensagens enviadas no Telegram (`mensagens_telegram`).
 
-### 4.3. Notificações (Telegram Bot API)
-* **Integração:** Chamada HTTP direta do backend em Go para a **Telegram Bot API** (`sendMessage`), enviando automaticamente os avisos de chegada/saída dos professores nos grupos das respectivas turmas.
+### 4.3. Notificações e Higiene Automática do Canal (Telegram Bot API)
+* **Envio em Tempo Real:** Chamada HTTP direta do backend em Go para o método `sendMessage` da **Telegram Bot API**, enviando automaticamente os avisos de chegada/saída dos professores nos grupos/canais das respectivas turmas.
+* **Limpeza Noturna Automática (00:00 BRT):** Todos os dias à meia-noite (`03:00` UTC), o Cron Job na Vercel aciona `/api/cron/limpar-telegram`. O backend consulta os `message_id`s registrados nas últimas 48 horas na tabela auxiliar `mensagens_telegram`, envia exclusão em lote (`deleteMessages`) para manter o canal dos alunos sempre limpo no dia seguinte e remove apenas os apontadores da fila auxiliar — **preservando integralmente todo o histórico oficial de presenças em `registros_presenca` no PostgreSQL (Neon)**.
+* **Evolução Futura (Canal Espelho Administrativo):** Como a API do Telegram remove mensagens apagadas para todos os participantes do canal, o histórico permanente já fica garantido no PostgreSQL (Neon). Em uma fase futura, o backend pode enviar um resumo diário consolidado (ou espelhar cada batida) para um canal privado exclusivo da coordenação/administradores antes da limpeza noturna.
 
 ---
 
-## 5. Próximos Passos
+## 5. Estado Atual e Roadmap
 
 - [x] Definir arquitetura completa: **ESP32 DevKit v1 + RFID I2C** → **Go (Vercel)** → **PostgreSQL (Neon)** + **Bot Telegram**.
 - [x] Validar fisicamente o hardware (**ESP32 DevKit v1** + **Leitor RFID MFRC522 I2C**).
-- [ ] Limpar arquivos temporários do repositório e atualizar o firmware final do ESP32 com conexão Wi-Fi e envio HTTP para a API.
-- [ ] Modelar as tabelas no **PostgreSQL (Neon)** e implementar os endpoints em **Go** na **Vercel** integrados ao **Bot do Telegram**.
+- [x] Atualizar firmware final do ESP32 (`Código ESP-32/sketch.ino`) com Wi-Fi, NTP, fila off-line e envio HTTPS para a API.
+- [x] Modelar tabelas no **PostgreSQL (Neon)** e publicar API REST em **Go** na **Vercel** integrada ao **Bot do Telegram** com limpeza noturna automatizada às `00:00`.
+- [ ] *(Fase futura)* Adicionar canal espelho/relatório diário exclusivo para administradores no Telegram e painel web gerencial sobre o PostgreSQL.

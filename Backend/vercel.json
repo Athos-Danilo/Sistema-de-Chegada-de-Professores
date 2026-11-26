@@ -5,5 +5,11 @@
     "env": {
       "GO_BUILD_FLAGS": "-ldflags '-s -w'"
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/limpar-telegram",
+      "schedule": "0 3 * * *"
+    }
+  ]
 }

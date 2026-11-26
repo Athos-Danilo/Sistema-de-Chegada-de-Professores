@@ -30,6 +30,9 @@ type RepositorioPresenca interface {
 	BuscarAulaPorHorario(ctx context.Context, idProfessor int, idDispositivo string, diaSemana int, horarioLocal string) (*modelos.AulaAgendada, error)
 	RegistrarPresenca(ctx context.Context, registro *modelos.RegistroPresenca) (int64, error)
 	RegistrarTelemetria(ctx context.Context, dados modelos.RequisicaoTelemetria) error
+	RegistrarMensagemTelegram(ctx context.Context, chatId string, messageId int64) error
+	ListarMensagensTelegramParaLimpar(ctx context.Context) ([]modelos.MensagemTelegramRegistrada, error)
+	RemoverMensagensTelegramDoChat(ctx context.Context, chatId string, ateId int64) (int, error)
 }
 
 // RepositorioPostgres implementa RepositorioPresenca utilizando pgxpool.
@@ -233,4 +236,58 @@ func (r *RepositorioPostgres) RegistrarTelemetria(ctx context.Context, dados mod
 	}
 
 	return nil
+}
+
+// RegistrarMensagemTelegram salva o identificador da mensagem enviada para exclusão noturna no Telegram.
+func (r *RepositorioPostgres) RegistrarMensagemTelegram(ctx context.Context, chatId string, messageId int64) error {
+	const consulta = `
+		INSERT INTO mensagens_telegram (chat_id, message_id)
+		VALUES ($1, $2)
+		ON CONFLICT (chat_id, message_id) DO NOTHING
+	`
+	if _, erro := r.pool.Exec(ctx, consulta, chatId, messageId); erro != nil {
+		return fmt.Errorf("erro ao registrar mensagem do Telegram para limpeza: %w", erro)
+	}
+	return nil
+}
+
+// ListarMensagensTelegramParaLimpar retorna os identificadores de mensagens pendentes de limpeza.
+func (r *RepositorioPostgres) ListarMensagensTelegramParaLimpar(ctx context.Context) ([]modelos.MensagemTelegramRegistrada, error) {
+	const consulta = `
+		SELECT id, chat_id, message_id, enviada_em
+		FROM mensagens_telegram
+		ORDER BY chat_id ASC, id ASC
+	`
+	linhas, erro := r.pool.Query(ctx, consulta)
+	if erro != nil {
+		return nil, fmt.Errorf("erro ao listar mensagens do Telegram para limpeza: %w", erro)
+	}
+	defer linhas.Close()
+
+	var mensagens []modelos.MensagemTelegramRegistrada
+	for linhas.Next() {
+		var item modelos.MensagemTelegramRegistrada
+		if erro := linhas.Scan(&item.Id, &item.ChatId, &item.MessageId, &item.EnviadaEm); erro != nil {
+			return nil, fmt.Errorf("erro ao ler registro de mensagem do Telegram: %w", erro)
+		}
+		mensagens = append(mensagens, item)
+	}
+	if erro := linhas.Err(); erro != nil {
+		return nil, fmt.Errorf("erro ao percorrer mensagens do Telegram: %w", erro)
+	}
+
+	return mensagens, nil
+}
+
+// RemoverMensagensTelegramDoChat limpa apenas a fila auxiliar após exclusão no Telegram, mantendo o histórico de presença intacto.
+func (r *RepositorioPostgres) RemoverMensagensTelegramDoChat(ctx context.Context, chatId string, ateId int64) (int, error) {
+	const consulta = `
+		DELETE FROM mensagens_telegram
+		WHERE chat_id = $1 AND id <= $2
+	`
+	resultado, erro := r.pool.Exec(ctx, consulta, chatId, ateId)
+	if erro != nil {
+		return 0, fmt.Errorf("erro ao remover fila de mensagens do Telegram: %w", erro)
+	}
+	return int(resultado.RowsAffected()), nil
 }

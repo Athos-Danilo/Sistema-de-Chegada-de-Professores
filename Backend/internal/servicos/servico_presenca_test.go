@@ -20,6 +20,7 @@ type repositorioMemoria struct {
 	ultimoEvento string
 	aula         *modelos.AulaAgendada
 	registros    []modelos.RegistroPresenca
+	mensagens    []modelos.MensagemTelegramRegistrada
 }
 
 func (m *repositorioMemoria) BuscarDispositivo(_ context.Context, idDispositivo string) (*modelos.Dispositivo, error) {
@@ -54,13 +55,52 @@ func (m *repositorioMemoria) RegistrarTelemetria(_ context.Context, _ modelos.Re
 	return nil
 }
 
-type notificadorFalso struct {
-	enviados []telegram.DadosNotificacao
+func (m *repositorioMemoria) RegistrarMensagemTelegram(_ context.Context, chatId string, messageId int64) error {
+	m.mensagens = append(m.mensagens, modelos.MensagemTelegramRegistrada{
+		Id:        int64(len(m.mensagens) + 1),
+		ChatId:    chatId,
+		MessageId: messageId,
+		EnviadaEm: time.Now(),
+	})
+	return nil
 }
 
-func (n *notificadorFalso) EnviarAlertaPresenca(_ context.Context, dados telegram.DadosNotificacao) error {
+func (m *repositorioMemoria) ListarMensagensTelegramParaLimpar(_ context.Context) ([]modelos.MensagemTelegramRegistrada, error) {
+	copia := make([]modelos.MensagemTelegramRegistrada, len(m.mensagens))
+	copy(copia, m.mensagens)
+	return copia, nil
+}
+
+func (m *repositorioMemoria) RemoverMensagensTelegramDoChat(_ context.Context, chatId string, ateId int64) (int, error) {
+	restantes := make([]modelos.MensagemTelegramRegistrada, 0, len(m.mensagens))
+	removidos := 0
+	for _, msg := range m.mensagens {
+		if msg.ChatId == chatId && msg.Id <= ateId {
+			removidos++
+			continue
+		}
+		restantes = append(restantes, msg)
+	}
+	m.mensagens = restantes
+	return removidos, nil
+}
+
+type notificadorFalso struct {
+	enviados       []telegram.DadosNotificacao
+	apagadasPorChat map[string][]int64
+}
+
+func (n *notificadorFalso) EnviarAlertaPresenca(_ context.Context, dados telegram.DadosNotificacao) (int64, error) {
 	n.enviados = append(n.enviados, dados)
-	return nil
+	return int64(100 + len(n.enviados)), nil
+}
+
+func (n *notificadorFalso) ApagarMensagens(_ context.Context, chatId string, idsMensagens []int64) (int, error) {
+	if n.apagadasPorChat == nil {
+		n.apagadasPorChat = make(map[string][]int64)
+	}
+	n.apagadasPorChat[chatId] = append(n.apagadasPorChat[chatId], idsMensagens...)
+	return len(idsMensagens), nil
 }
 
 func TestRegistrarLeituraAlternanciaEntradaSaidaENotificacao(t *testing.T) {
@@ -170,5 +210,45 @@ func TestAutenticacaoTokenInvalido(t *testing.T) {
 	})
 	if !errors.Is(erro, ErrTokenInvalido) {
 		t.Fatalf("esperado ErrTokenInvalido, obtido %v", erro)
+	}
+}
+
+func TestLimparMensagensTelegramPreservaHistoricoDoBanco(t *testing.T) {
+	fuso := time.FixedZone("BRT", -3*3600)
+	agora := time.Date(2026, 11, 26, 20, 0, 0, 0, fuso)
+
+	repo := &repositorioMemoria{
+		dispositivo: &modelos.Dispositivo{Id: "EMB-LAB-01", NomeSala: "Lab 01", TokenAutenticacao: "tok", Ativo: true},
+		professor:   &modelos.Professor{Id: 1, Nome: "Prof. Paulo Pérris", UidTag: "04:51:2D:71:CF:2A:81", Ativo: true},
+	}
+	notificador := &notificadorFalso{}
+	servico := NovoServicoPresenca(repo, notificador, fuso, "-1005901458470")
+	servico.DefinirRelogio(func() time.Time { return agora })
+
+	_, erro := servico.RegistrarLeitura(context.Background(), "tok", modelos.RequisicaoPresenca{
+		IdDispositivo:    "EMB-LAB-01",
+		UidTag:           "04:51:2D:71:CF:2A:81",
+		CarimboTempoLeit: agora.Unix(),
+	})
+	if erro != nil {
+		t.Fatalf("erro inesperado ao registrar leitura: %v", erro)
+	}
+	if len(repo.mensagens) != 1 {
+		t.Fatalf("esperado 1 message_id registrado na fila auxiliar, obtido %d", len(repo.mensagens))
+	}
+
+	repo.mensagens[0].EnviadaEm = agora.Add(-2 * time.Hour)
+	resLimpeza, erro := servico.LimparMensagensTelegram(context.Background())
+	if erro != nil {
+		t.Fatalf("erro inesperado ao limpar mensagens: %v", erro)
+	}
+	if resLimpeza.MensagensApagadas != 1 || resLimpeza.RegistrosRemovidos != 1 {
+		t.Fatalf("resumo de limpeza inesperado: %+v", resLimpeza)
+	}
+	if len(repo.mensagens) != 0 {
+		t.Fatalf("fila auxiliar deveria estar vazia após limpeza")
+	}
+	if len(repo.registros) != 1 {
+		t.Fatalf("histórico oficial de presenças deveria permanecer intacto (obtido %d)", len(repo.registros))
 	}
 }

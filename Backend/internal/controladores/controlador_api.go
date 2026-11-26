@@ -5,10 +5,12 @@ package controladores
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,7 +23,8 @@ import (
 
 // ControladorAPI agrupa os manipuladores HTTP dos endpoints do sistema SCP.
 type ControladorAPI struct {
-	servico *servicos.ServicoPresenca
+	servico     *servicos.ServicoPresenca
+	segredoCron string
 }
 
 var (
@@ -33,6 +36,11 @@ var (
 // NovoControladorAPI cria um controlador conectado ao serviço de presença informado.
 func NovoControladorAPI(servico *servicos.ServicoPresenca) *ControladorAPI {
 	return &ControladorAPI{servico: servico}
+}
+
+// DefinirSegredoCron configura o token Bearer aceito na rota de limpeza agendada.
+func (c *ControladorAPI) DefinirSegredoCron(segredo string) {
+	c.segredoCron = strings.TrimSpace(segredo)
 }
 
 // ObterControladorPadrao reutiliza a conexão com a Neon entre chamadas quentes na Vercel.
@@ -56,7 +64,9 @@ func ObterControladorPadrao() (*ControladorAPI, error) {
 		repositorio := banco.NovoRepositorioPostgres(pool)
 		notificador := telegram.NovoClienteTelegram(cfg.TokenBotTelegram)
 		servico := servicos.NovoServicoPresenca(repositorio, notificador, cfg.FusoHorario, cfg.ChatIdTelegramPadrao)
-		instanciaPadrao = NovoControladorAPI(servico)
+		controlador := NovoControladorAPI(servico)
+		controlador.DefinirSegredoCron(cfg.SegredoCron)
+		instanciaPadrao = controlador
 	})
 
 	return instanciaPadrao, erroInicial
@@ -164,6 +174,38 @@ func (c *ControladorAPI) TratarTelemetria(w http.ResponseWriter, r *http.Request
 	responderJSON(w, http.StatusOK, modelos.RespostaAPI{
 		Sucesso:  true,
 		Mensagem: "Heartbeat registrado com sucesso",
+	})
+}
+
+// TratarLimpezaNoturnaTelegram processa a rota agendada /api/cron/limpar-telegram (GET/POST).
+func (c *ControladorAPI) TratarLimpezaNoturnaTelegram(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		responderErro(w, http.StatusMethodNotAllowed, "Método não permitido; utilize GET ou POST")
+		return
+	}
+
+	if c.segredoCron == "" {
+		responderErro(w, http.StatusInternalServerError, "Variável CRON_SECRET não configurada no servidor")
+		return
+	}
+
+	esperado := "Bearer " + c.segredoCron
+	recebido := strings.TrimSpace(r.Header.Get("Authorization"))
+	if subtle.ConstantTimeCompare([]byte(recebido), []byte(esperado)) != 1 {
+		responderErro(w, http.StatusUnauthorized, "Token de autorização do cron inválido ou ausente")
+		return
+	}
+
+	resultado, erro := c.servico.LimparMensagensTelegram(r.Context())
+	if erro != nil {
+		responderErro(w, http.StatusInternalServerError, "Falha ao executar limpeza noturna do Telegram: "+erro.Error())
+		return
+	}
+
+	responderJSON(w, http.StatusOK, modelos.RespostaAPI{
+		Sucesso:  true,
+		Mensagem: "Limpeza noturna do Telegram concluída com sucesso",
+		Dados:    resultado,
 	})
 }
 

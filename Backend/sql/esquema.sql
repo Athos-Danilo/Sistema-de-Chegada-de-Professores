@@ -63,6 +63,15 @@ CREATE TABLE IF NOT EXISTS telemetria_dispositivos (
     registrado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS mensagens_telegram (
+    id BIGSERIAL PRIMARY KEY,
+    chat_id VARCHAR(64) NOT NULL,
+    message_id BIGINT NOT NULL,
+    enviada_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (chat_id, message_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_professores_tag_uid ON professores(tag_uid);
 CREATE INDEX IF NOT EXISTS idx_registros_prof_disp_data ON registros_presenca(professor_id, dispositivo_id, leitura_em DESC);
 CREATE INDEX IF NOT EXISTS idx_grades_busca ON grades_horarias(professor_id, dispositivo_id, dia_semana);
+CREATE INDEX IF NOT EXISTS idx_mensagens_telegram_enviada_em ON mensagens_telegram(enviada_em);

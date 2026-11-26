@@ -28,23 +28,41 @@ type DadosNotificacao struct {
 	Horario    string
 }
 
-// NotificadorTelegram define a interface de envio de alertas para facilitar testes.
+// NotificadorTelegram define a interface de envio e limpeza de alertas para facilitar testes.
 type NotificadorTelegram interface {
-	EnviarAlertaPresenca(ctx context.Context, dados DadosNotificacao) error
+	EnviarAlertaPresenca(ctx context.Context, dados DadosNotificacao) (int64, error)
+	ApagarMensagens(ctx context.Context, chatId string, idsMensagens []int64) (int, error)
 }
 
-// ClienteTelegram envia mensagens reais usando o endpoint sendMessage do Telegram.
+// ClienteTelegram envia mensagens reais usando a Telegram Bot API.
 type ClienteTelegram struct {
-	tokenBot   string
+	tokenBot    string
 	clienteHttp *http.Client
-	urlBase    string
+	urlBase     string
 }
 
-// payloadEnvioTelegram representa o corpo JSON aceito pela Telegram Bot API.
+// payloadEnvioTelegram representa o corpo JSON aceito pelo método sendMessage.
 type payloadEnvioTelegram struct {
 	ChatId    string `json:"chat_id"`
 	Texto     string `json:"text"`
 	ParseMode string `json:"parse_mode"`
+}
+
+type respostaEnvioTelegram struct {
+	Ok     bool `json:"ok"`
+	Result struct {
+		MessageId int64 `json:"message_id"`
+	} `json:"result"`
+}
+
+type payloadExclusaoLoteTelegram struct {
+	ChatId     string  `json:"chat_id"`
+	MessageIds []int64 `json:"message_ids"`
+}
+
+type payloadExclusaoUnicaTelegram struct {
+	ChatId    string `json:"chat_id"`
+	MessageId int64  `json:"message_id"`
 }
 
 // NovoClienteTelegram cria um cliente HTTP configurado para o Bot do Telegram.
@@ -58,41 +76,122 @@ func NovoClienteTelegram(tokenBot string) *ClienteTelegram {
 	}
 }
 
-// EnviarAlertaPresenca formata e envia a notificação de entrada ou saída para o grupo.
-func (c *ClienteTelegram) EnviarAlertaPresenca(ctx context.Context, dados DadosNotificacao) error {
+// EnviarAlertaPresenca formata e envia a notificação de entrada ou saída e retorna o message_id gerado.
+func (c *ClienteTelegram) EnviarAlertaPresenca(ctx context.Context, dados DadosNotificacao) (int64, error) {
 	if strings.TrimSpace(dados.ChatId) == "" {
-		return fmt.Errorf("chat_id do Telegram vazio: notificação ignorada")
+		return 0, fmt.Errorf("chat_id do Telegram vazio: notificação ignorada")
 	}
 
-	texto := montarMensagemFormatada(dados)
-	corpo, erro := json.Marshal(payloadEnvioTelegram{
+	corpoResposta, codigoStatus, erro := c.postarJSON(ctx, "sendMessage", payloadEnvioTelegram{
 		ChatId:    dados.ChatId,
-		Texto:     texto,
+		Texto:     montarMensagemFormatada(dados),
 		ParseMode: "HTML",
 	})
 	if erro != nil {
-		return fmt.Errorf("erro ao serializar payload do Telegram: %w", erro)
+		return 0, erro
+	}
+	if codigoStatus < 200 || codigoStatus >= 300 {
+		return 0, fmt.Errorf("API do Telegram retornou status %d: %s", codigoStatus, corpoResposta)
 	}
 
-	endpoint := fmt.Sprintf("%s/bot%s/sendMessage", c.urlBase, c.tokenBot)
+	var resposta respostaEnvioTelegram
+	if erro := json.Unmarshal([]byte(corpoResposta), &resposta); erro != nil {
+		return 0, nil
+	}
+	return resposta.Result.MessageId, nil
+}
+
+// ApagarMensagens remove em lote até 100 mensagens por requisição no canal/grupo informado.
+func (c *ClienteTelegram) ApagarMensagens(ctx context.Context, chatId string, idsMensagens []int64) (int, error) {
+	if strings.TrimSpace(chatId) == "" || len(idsMensagens) == 0 {
+		return 0, nil
+	}
+
+	apagadas := 0
+	const tamanhoLote = 100
+	for inicio := 0; inicio < len(idsMensagens); inicio += tamanhoLote {
+		fim := inicio + tamanhoLote
+		if fim > len(idsMensagens) {
+			fim = len(idsMensagens)
+		}
+		lote := idsMensagens[inicio:fim]
+
+		corpoResposta, codigoStatus, erro := c.postarJSON(ctx, "deleteMessages", payloadExclusaoLoteTelegram{
+			ChatId:     chatId,
+			MessageIds: lote,
+		})
+		if erro != nil {
+			return apagadas, erro
+		}
+		if codigoStatus >= 200 && codigoStatus < 300 {
+			apagadas += len(lote)
+			continue
+		}
+		if erroPermissaoOuFatal(codigoStatus, corpoResposta) {
+			return apagadas, fmt.Errorf("API do Telegram recusou exclusão em lote (%d): %s", codigoStatus, corpoResposta)
+		}
+
+		// Se alguma mensagem do lote já foi removida manualmente ou passou de 48h, tenta individualmente.
+		removidasIndividuais, erroIndiv := c.apagarIndividualmente(ctx, chatId, lote)
+		apagadas += removidasIndividuais
+		if erroIndiv != nil {
+			return apagadas, erroIndiv
+		}
+	}
+
+	return apagadas, nil
+}
+
+func (c *ClienteTelegram) apagarIndividualmente(ctx context.Context, chatId string, ids []int64) (int, error) {
+	apagadas := 0
+	for _, idMensagem := range ids {
+		corpoResposta, codigoStatus, erro := c.postarJSON(ctx, "deleteMessage", payloadExclusaoUnicaTelegram{
+			ChatId:    chatId,
+			MessageId: idMensagem,
+		})
+		if erro != nil {
+			return apagadas, erro
+		}
+		if codigoStatus >= 200 && codigoStatus < 300 {
+			apagadas++
+			continue
+		}
+		if erroPermissaoOuFatal(codigoStatus, corpoResposta) {
+			return apagadas, fmt.Errorf("API do Telegram recusou exclusão (%d): %s", codigoStatus, corpoResposta)
+		}
+	}
+	return apagadas, nil
+}
+
+func (c *ClienteTelegram) postarJSON(ctx context.Context, metodo string, payload interface{}) (string, int, error) {
+	corpo, erro := json.Marshal(payload)
+	if erro != nil {
+		return "", 0, fmt.Errorf("erro ao serializar payload (%s): %w", metodo, erro)
+	}
+
+	endpoint := fmt.Sprintf("%s/bot%s/%s", c.urlBase, c.tokenBot, metodo)
 	requisicao, erro := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(corpo))
 	if erro != nil {
-		return fmt.Errorf("erro ao criar requisição para o Telegram: %w", erro)
+		return "", 0, fmt.Errorf("erro ao criar requisição para o Telegram (%s): %w", metodo, erro)
 	}
 	requisicao.Header.Set("Content-Type", "application/json")
 
 	resposta, erro := c.clienteHttp.Do(requisicao)
 	if erro != nil {
-		return fmt.Errorf("erro de rede ao chamar API do Telegram: %w", erro)
+		return "", 0, fmt.Errorf("erro de rede ao chamar API do Telegram (%s): %w", metodo, erro)
 	}
 	defer resposta.Body.Close()
 
-	if resposta.StatusCode < 200 || resposta.StatusCode >= 300 {
-		corpoErro, _ := io.ReadAll(io.LimitReader(resposta.Body, 512))
-		return fmt.Errorf("API do Telegram retornou status %d: %s", resposta.StatusCode, string(corpoErro))
-	}
+	bytesResposta, _ := io.ReadAll(io.LimitReader(resposta.Body, 4096))
+	return string(bytesResposta), resposta.StatusCode, nil
+}
 
-	return nil
+func erroPermissaoOuFatal(codigoStatus int, corpo string) bool {
+	if codigoStatus == http.StatusUnauthorized || codigoStatus == http.StatusForbidden || codigoStatus >= 500 {
+		return true
+	}
+	texto := strings.ToLower(corpo)
+	return strings.Contains(texto, "right") || strings.Contains(texto, "administrator")
 }
 
 // montarMensagemFormatada gera uma mensagem clara em HTML para leitura rápida no Telegram.
