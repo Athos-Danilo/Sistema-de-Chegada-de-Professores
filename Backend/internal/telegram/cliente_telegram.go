@@ -194,11 +194,11 @@ func erroPermissaoOuFatal(codigoStatus int, corpo string) bool {
 	return strings.Contains(texto, "right") || strings.Contains(texto, "administrator")
 }
 
-// montarMensagemFormatada gera uma mensagem clara em HTML para leitura rápida no Telegram.
+// montarMensagemFormatada gera uma mensagem limpa em HTML com bloco visual para leitura rápida no Telegram.
 func montarMensagemFormatada(dados DadosNotificacao) string {
-	cabecalho := "✅ <b>CHEGADA REGISTRADA</b>"
+	cabecalho := "🟢 <b>CHEGADA REGISTRADA</b>"
 	if dados.TipoEvento == modelos.EventoSaida {
-		cabecalho = "👋 <b>SAÍDA REGISTRADA</b>"
+		cabecalho = "🔴 <b>SAÍDA REGISTRADA</b>"
 	}
 
 	local := escaparHTML(dados.Sala)
@@ -207,18 +207,20 @@ func montarMensagemFormatada(dados DadosNotificacao) string {
 	}
 
 	var construtor strings.Builder
-	construtor.WriteString(cabecalho + "\n\n")
-	construtor.WriteString(fmt.Sprintf("👨‍🏫 <b>Professor:</b> %s\n", escaparHTML(dados.Professor)))
-	construtor.WriteString(fmt.Sprintf("📍 <b>Local:</b> %s\n", local))
+	construtor.WriteString(cabecalho + "\n\n<blockquote>")
+	construtor.WriteString(fmt.Sprintf("<b>Professor:</b> %s\n", escaparHTML(dados.Professor)))
 
 	if strings.TrimSpace(dados.Disciplina) != "" {
-		construtor.WriteString(fmt.Sprintf("📚 <b>Disciplina:</b> %s\n", escaparHTML(dados.Disciplina)))
-	}
-	if strings.TrimSpace(dados.NomeTurma) != "" {
-		construtor.WriteString(fmt.Sprintf("🎓 <b>Turma:</b> %s\n", escaparHTML(dados.NomeTurma)))
+		construtor.WriteString(fmt.Sprintf("<b>Disciplina:</b> %s\n", escaparHTML(dados.Disciplina)))
 	}
 
-	construtor.WriteString(fmt.Sprintf("⏰ <b>Horário:</b> %s", escaparHTML(dados.Horario)))
+	construtor.WriteString(fmt.Sprintf("<b>Local:</b> %s\n", local))
+
+	if strings.TrimSpace(dados.NomeTurma) != "" {
+		construtor.WriteString(fmt.Sprintf("<b>Turma:</b> %s\n", escaparHTML(dados.NomeTurma)))
+	}
+
+	construtor.WriteString(fmt.Sprintf("<b>Horário:</b> <code>%s</code></blockquote>", escaparHTML(dados.Horario)))
 	return construtor.String()
 }
 
