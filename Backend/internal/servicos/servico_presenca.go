@@ -141,7 +141,8 @@ func (s *ServicoPresenca) RegistrarLeitura(
 			Disciplina: disciplina,
 			NomeTurma:  nomeTurma,
 			TipoEvento: tipoEvento,
-			Horario:    leituraLocal.Format("02/01/2006 às 15:04:05"),
+			Data:       leituraLocal.Format("02/01/2006"),
+			Horario:    leituraLocal.Format("15:04:05"),
 		})
 		if erroEnvio != nil {
 			// A falha no Telegram não deve impedir o salvamento do ponto no PostgreSQL.

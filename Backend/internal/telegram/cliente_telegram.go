@@ -25,6 +25,7 @@ type DadosNotificacao struct {
 	Disciplina string
 	NomeTurma  string
 	TipoEvento string
+	Data       string
 	Horario    string
 }
 
@@ -208,7 +209,7 @@ func montarMensagemFormatada(dados DadosNotificacao) string {
 
 	var construtor strings.Builder
 	construtor.WriteString(cabecalho + "\n\n<blockquote>")
-	construtor.WriteString(fmt.Sprintf("<b>Professor:</b> %s\n", escaparHTML(dados.Professor)))
+	construtor.WriteString(fmt.Sprintf("<b>Professor(a):</b> %s\n", escaparHTML(dados.Professor)))
 
 	if strings.TrimSpace(dados.Disciplina) != "" {
 		construtor.WriteString(fmt.Sprintf("<b>Disciplina:</b> %s\n", escaparHTML(dados.Disciplina)))
@@ -218,6 +219,10 @@ func montarMensagemFormatada(dados DadosNotificacao) string {
 
 	if strings.TrimSpace(dados.NomeTurma) != "" {
 		construtor.WriteString(fmt.Sprintf("<b>Turma:</b> %s\n", escaparHTML(dados.NomeTurma)))
+	}
+
+	if strings.TrimSpace(dados.Data) != "" {
+		construtor.WriteString(fmt.Sprintf("<b>Data:</b> <code>%s</code>\n", escaparHTML(dados.Data)))
 	}
 
 	construtor.WriteString(fmt.Sprintf("<b>Horário:</b> <code>%s</code></blockquote>", escaparHTML(dados.Horario)))
